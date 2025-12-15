@@ -91,92 +91,87 @@ class RelationalPairClassifierGraphormer(nn.Module):
     which learn unique transformations for each edge type.
     """
     def __init__(self,
-                     num_nodes,
-                     sum_node_features=True,
-                     use_pretrained_gene_embs=False,
-                     pretrained_gene_embs_tensor=None,
-                     fine_tune_gene_emb=True,
-                     num_edge_types=3,
-                     d_model=256,
-                     nhead=4,
-                     num_encoder_layers=4,
-                     max_spd=12,
-                     structural_max_dist=6,
-                     num_degree_bins=8,
-                     max_in_degree=12000,
-                     max_out_degree=12000,
-                     num_ont_bins=10,
-                     max_lifespan_dist=4,
-                     num_classes=3,
-                     dropout_p=0.1
+                 graph_data,
+                 params
                  ):
         super().__init__()
-        self.num_nodes = num_nodes
-        self.max_spd = max_spd
-        self.num_edge_types = num_edge_types
+        self.num_nodes = graph_data.num_nodes
+        self.num_classes = graph_data.pair_effect_type_soft_smoothed.shape[1]
+        self.num_edge_types = graph_data.edge_type.max().item()
+        self.max_lifespan_dist = graph_data.lifespan_dist.max().item()
 
-        self.sum_node_features = sum_node_features
-        self.use_pretrained_gene_embs = use_pretrained_gene_embs
-        self.pretrained_gene_embs_tensor = pretrained_gene_embs_tensor
-        self.structural_max_dist = structural_max_dist
-        self.max_in_degree = max_in_degree
-        self.max_out_degree = max_out_degree
-        self.num_ont_bins = num_ont_bins
-        self.max_lifespan_dist = max_lifespan_dist
+        self.d_model = params.get('d_model', 8)
+        self.nhead = params.get('num_heads', 4)
+        self.num_encoder_layers = params.get('num_layers', 4)
+        self.dropout_p = params.get('dropout_p', 0.1)
+
+        self.sum_node_features = params.get('sum_node_features', True)
+        self.use_pretrained_gene_embs = params.get('use_pretrained_gene_embs', False)
+        self.pretrained_gene_embs_tensor = params.get('pretrained_gene_embs_tensor', None)
+        self.max_spd = params.get('max_spd', 6)
+        self.structural_max_dist = params.get('max_spd', 6)
+        self.num_degree_bins = params.get('num_degree_bins', 4)
+        # self.num_ont_bins = 0
+
+        self.history = {
+            "train_loss": [],
+            "test_loss": [],
+            "test_metrics": [],
+        }
 
         # --- Initialize node embeddings ---
-        self.node_identity_embedding = nn.Embedding(self.num_nodes + 1, d_model, padding_idx=self.num_nodes)
+        self.node_identity_embedding = nn.Embedding(self.num_nodes + 1, self.d_model, padding_idx=self.num_nodes)
 
         if self.pretrained_gene_embs_tensor is not None:
-            _, gene_embed_dim = pretrained_gene_embs_tensor.shape
+            _, gene_embed_dim = self.pretrained_gene_embs_tensor.shape
             self.gene_embed_dim = gene_embed_dim
-            self.pretrained_gene_emb_proj = nn.Linear(gene_embed_dim, d_model)
+            self.pretrained_gene_emb_proj = nn.Linear(gene_embed_dim, self.d_model)
             self.pretrained_node_embedding = nn.Embedding(self.num_nodes + 1, gene_embed_dim, padding_idx=self.num_nodes)
-            self.pretrained_node_embedding.weight.data[:self.num_nodes] = pretrained_gene_embs_tensor
+            self.pretrained_node_embedding.weight.data[:self.num_nodes] = self.pretrained_gene_embs_tensor
             self.pretrained_node_embedding.weight.data[self.num_nodes].zero_()
-            self.pretrained_node_embedding.weight.requires_grad = fine_tune_gene_emb  # set True if you want fine-tuning
+            self.pretrained_node_embedding.weight.requires_grad = self.fine_tune_gene_emb  # set True if you want fine-tuning
 
-        self.dist_uv_embedding = nn.Embedding(self.structural_max_dist + 1, d_model)
-        self.in_degree_embedding = nn.Embedding(num_degree_bins, d_model)
-        self.out_degree_embedding = nn.Embedding(num_degree_bins, d_model)
-        self.lifespan_dist_embedding = nn.Embedding(max_lifespan_dist + 1, d_model,
-                                                    padding_idx=max_lifespan_dist)
-        # self.mutual_interactor_emb = nn.Embedding(2, d_model)
+        self.dist_uv_embedding = nn.Embedding(self.structural_max_dist + 1, self.d_model)
+        self.in_degree_embedding = nn.Embedding(self.num_degree_bins, self.d_model)
+        self.out_degree_embedding = nn.Embedding(self.num_degree_bins, self.d_model)
+        self.lifespan_dist_embedding = nn.Embedding(self.max_lifespan_dist + 1, self.d_model,
+                                                    padding_idx=self.max_lifespan_dist)
+        # self.mutual_interactor_emb = nn.Embedding(2, self.d_model)
 
         # --- Initialize perturbation type embedding ---
         # This embedding is only applied to focal/perturbed nodes.
         # Indices: 0=knockdown, 1=knockout, 2=overexpression, 3=padding_idx (for non-focal nodes)
-        self.perturbation_embedding = nn.Embedding(4, d_model, padding_idx=3)
+        self.perturbation_embedding = nn.Embedding(4, self.d_model, padding_idx=3)
 
         # --- Initialize [PAIR] classification token ---
-        self.base_pair_token = nn.Parameter(torch.randn(1, 1, d_model))
+        self.base_pair_token = nn.Parameter(torch.randn(1, 1, self.d_model))
 
         # --- Initialize embeddings for biasing attention ---
-        self.pairwise_dist_embedding = nn.Embedding(max_spd + 1, nhead, padding_idx=max_spd)
-        self.edge_type_embedding = nn.Embedding(num_edge_types + 1, nhead, padding_idx=num_edge_types)
+        self.pairwise_dist_embedding = nn.Embedding(self.max_spd + 1, self.nhead, padding_idx=self.max_spd)
+        self.edge_type_embedding = nn.Embedding(self.num_edge_types + 1, self.nhead, padding_idx=self.num_edge_types)
         # self.mutual_interactor_bias_emb = nn.Embedding(2, nhead)
         # self.lifespan_bias_emb = nn.Embedding(2, nhead)
 
         # --- Initialize a nn.Linear projection for each unique edge type in the graph ---
         self.value_projections = nn.ModuleDict({
-            str(i): nn.Linear(d_model, d_model) for i in range(num_edge_types)
+            str(i): nn.Linear(self.d_model, self.d_model) for i in range(self.num_edge_types)
         })
-        self.value_projections[str(num_edge_types)] = nn.Linear(d_model, d_model)
+        self.value_projections[str(self.num_edge_types)] = nn.Linear(self.d_model, self.d_model)
 
         # --- Initialize the transformer encoder's layers ---
         self.encoder_layers = nn.ModuleList([
             RelationalGTEncoderLayer(
-                d_model, nhead, self.value_projections, dim_feedforward=d_model * 4, dropout_p=dropout_p
+                self.d_model, self.nhead, self.value_projections, dim_feedforward=self.d_model * 4, dropout_p=self.dropout_p
             )
-            for _ in range(num_encoder_layers)
+            for _ in range(self.num_encoder_layers)
         ])
 
         # --- Initialize the classifier for node pair classification via the [PAIR] token ---
         self.classifier = nn.Sequential(
-            nn.Linear(d_model, d_model * 2),
+            nn.Linear(self.d_model, self.d_model * 2),
             nn.ReLU(),
-            nn.Dropout(dropout_p),
-            nn.Linear(d_model * 2, num_classes)
+            nn.Dropout(self.dropout_p),
+            nn.Linear(self.d_model * 2, self.num_classes)
         )
 
     def forward(self, batch, return_attention=False, return_representation=False):
