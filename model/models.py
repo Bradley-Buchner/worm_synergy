@@ -149,8 +149,8 @@ class RelationalPairClassifierGraphormer(nn.Module):
         # --- Initialize embeddings for biasing attention ---
         self.pairwise_dist_embedding = nn.Embedding(self.max_spd + 1, self.nhead, padding_idx=self.max_spd)
         self.edge_type_embedding = nn.Embedding(self.num_edge_types + 1, self.nhead, padding_idx=self.num_edge_types)
-        # self.mutual_interactor_bias_emb = nn.Embedding(2, nhead)
-        # self.lifespan_bias_emb = nn.Embedding(2, nhead)
+        self.mutual_interactor_bias_emb = nn.Embedding(2, self.nhead)
+        # self.lifespan_bias_emb = nn.Embedding(2, self.nhead)
 
         # --- Initialize a nn.Linear projection for each unique edge type in the graph ---
         self.value_projections = nn.ModuleDict({
@@ -259,18 +259,18 @@ class RelationalPairClassifierGraphormer(nn.Module):
         # lifespan_attn_bias = lifespan_bias.permute(0, 2, 1).unsqueeze(2)
 
         # 4. Bias by the mutual interactor status (0/1) of the attention "sender" (key-only bias)
-        # # Create a (B, 1) tensor of zeros (for the [CLS] token, which is not a mutual interactor)
-        # cls_pad = torch.zeros(B, 1, dtype=batch['is_mutual_interactor'].dtype,
-        #                       device=batch['is_mutual_interactor'].device)
-        # padded_mutual_flags = torch.cat([cls_pad, batch['is_mutual_interactor']], dim=1)
-        # mutual_bias = self.mutual_interactor_bias_emb(padded_mutual_flags)
-        # mutual_attn_bias = mutual_bias.permute(0, 2, 1).unsqueeze(2)
+        # Create a (B, 1) tensor of zeros (for the [CLS] token, which is not a mutual interactor)
+        cls_pad = torch.zeros(B, 1, dtype=batch['is_mutual_interactor'].dtype,
+                              device=batch['is_mutual_interactor'].device)
+        padded_mutual_flags = torch.cat([cls_pad, batch['is_mutual_interactor']], dim=1)
+        mutual_bias = self.mutual_interactor_bias_emb(padded_mutual_flags)
+        mutual_attn_bias = mutual_bias.permute(0, 2, 1).unsqueeze(2)
 
         # Add the biases together
         combined_pairwise_bias = pairwise_dist_bias + interpolated_edge_bias
         pairwise_attn_bias = combined_pairwise_bias.permute(0, 3, 1, 2)
-        attention_bias = pairwise_attn_bias
-        # attention_bias = pairwise_attn_bias + mutual_attn_bias + lifespan_attn_bias
+        # attention_bias = pairwise_attn_bias
+        attention_bias = pairwise_attn_bias + mutual_attn_bias # + lifespan_attn_bias
 
         # --- Prepare pairwise relation types for transformer encoder ---
         # Round the average edge type matrix to determine what value projection to use for each nodes pair
