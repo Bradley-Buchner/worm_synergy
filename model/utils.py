@@ -4,6 +4,10 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from scipy.stats import pearsonr
 import random
+import pandas as pd
+import seaborn as sns
+from sklearn.manifold import TSNE
+from collections import defaultdict
 
 from model.eval import *
 from model.models import NaiveBaseline, UniformBaseline
@@ -527,3 +531,253 @@ def naive_baseline(model, train_loader, test_loader, loss_fn, baseline_type='mea
         torch.cuda.empty_cache()
 
     return test_results
+
+
+def visualize_synergy_landscape(model, dataloader, color_by='class', device='mps'):
+    model.eval()
+    model.to(device)
+
+    representations = []
+    labels = []
+
+    print("Extracting pair representations...")
+    with torch.no_grad():
+        for batch in dataloader:
+            for k, v in batch.items():
+                if torch.is_tensor(v):
+                    batch[k] = v.to(device)
+
+            _, pair_rep = model(batch, return_representation=True)
+            representations.append(pair_rep.cpu().numpy())
+
+            labels.append(batch['target_soft_smoothed'].cpu().numpy())
+
+    X = np.concatenate(representations, axis=0)
+
+    print(f"Running t-SNE on {X.shape[0]} pairs...")
+    tsne = TSNE(n_components=2, perplexity=30, random_state=23, init='pca', learning_rate='auto')
+    X_embedded = tsne.fit_transform(X)
+
+    plt.figure(figsize=(10, 8))
+
+    # Check if we have labels to plot
+    if len(labels) > 0:
+        y_raw = np.concatenate(labels, axis=0)
+        df = pd.DataFrame({'x': X_embedded[:, 0], 'y': X_embedded[:, 1]})
+
+        df['Synergy Frequency'] = y_raw[:, 2]
+
+        if color_by == 'class':
+            y_indices = np.argmax(y_raw, axis=1)
+            classes = ['Synergistic' if idx == 2 else 'Not Synergistic' for idx in y_indices]
+            df['Class'] = classes
+
+            # Sort by frequency so larger/synergistic dots plot on top of smaller ones
+            df = df.sort_values(by='Synergy Frequency')
+
+            sns.scatterplot(
+                data=df, x='x', y='y',
+                hue='Class',               # Color determined by Class
+                # size='Synergy Frequency',      # Size determined by Frequency
+                # sizes=(10, 200),                # Range: Small dots (low freq) -> Big dots (high freq)
+                palette={'Synergistic': 'red', 'Not Synergistic': '#eeeeee'}, # Red vs Dark Grey
+                alpha=0.85,
+                edgecolor='none'
+            )
+            plt.title("t-SNE of [PAIR] Token Representation (Training Set)")
+
+    else:
+        # Fallback if no labels exist
+        plt.scatter(X_embedded[:, 0], X_embedded[:, 1], alpha=0.5, s=20, c='steelblue')
+        plt.title("Synergy Landscape (Unlabeled)")
+
+    plt.xlabel("t-SNE 1")
+    plt.ylabel("t-SNE 2")
+
+    # Visual cleanup
+    sns.despine()
+    plt.grid(False) # Clean look
+    plt.show()
+
+
+def analyze_top_attended_nodes(model, loader, id_to_name_map, device, top_k=20, min_occurrences=0):
+    model.to(device)
+    model.eval()
+
+    pair_attn_sum = defaultdict(float)
+    all_tokens_attn_sum = defaultdict(float)
+    node_occurrence_count = defaultdict(int)
+
+    # Metadata Caches
+    node_lifespan_status = {}
+    node_in_degree = {}
+    node_out_degree = {}
+
+    print(f"--- Starting Top-{top_k} Node Attention Analysis ---")
+
+    with torch.no_grad():
+        for batch in tqdm(loader, desc="Scanning Node Attention"):
+
+            batch_on_device = {}
+            for k, v in batch.items():
+                if isinstance(v, torch.Tensor):
+                    batch_on_device[k] = v.to(device)
+                else:
+                    batch_on_device[k] = v
+
+            logits, batch_attn_weights = model(batch_on_device, return_attention=True)
+
+            # Last layer attention: (B, Heads, Seq, Seq) -> Average heads: (B, Seq, Seq)
+            avg_attn = batch_attn_weights[-1].mean(dim=1)
+
+            # Slice off [PAIR] token to align with N nodes
+            pair_to_nodes_attn = avg_attn[:, 0, 1:]
+            avg_incoming = avg_attn.mean(dim=1)
+            all_to_nodes_attn = avg_incoming[:, 1:]
+
+            # Metadata extraction
+            if 'node_ids' in batch_on_device:
+                batch_node_ids = batch_on_device['node_ids'].cpu().numpy()
+            elif 'x' in batch_on_device:
+                batch_node_ids = batch_on_device['x'].squeeze().cpu().numpy()
+            else:
+                continue
+
+            # Extract lifespan info
+            if 'is_lifespan_gene' in batch_on_device:
+                batch_is_lifespan = batch_on_device['is_lifespan_gene'].cpu().numpy()
+            else:
+                batch_is_lifespan = np.zeros_like(batch_node_ids, dtype=bool)
+
+            # Extract Centrality (Degree) info
+            if 'in_degree' in batch_on_device:
+                batch_in_degree = batch_on_device['in_degree'].cpu().numpy()
+            else:
+                batch_in_degree = np.zeros_like(batch_node_ids, dtype=int)
+
+            if 'out_degree' in batch_on_device:
+                batch_out_degree = batch_on_device['out_degree'].cpu().numpy()
+            else:
+                batch_out_degree = np.zeros_like(batch_node_ids, dtype=int)
+
+            dist_to_u = batch_on_device['dist_to_u'].cpu()
+            dist_to_v = batch_on_device['dist_to_v'].cpu()
+            padding_mask = batch_on_device['padding_mask'].cpu().bool()
+
+            batch_size = pair_to_nodes_attn.shape[0]
+            pair_to_nodes_attn = pair_to_nodes_attn.cpu()
+            all_to_nodes_attn = all_to_nodes_attn.cpu()
+
+            for i in range(batch_size):
+                is_focal = (dist_to_u[i] == 0) | (dist_to_v[i] == 0)
+                is_pad = padding_mask[i]
+                valid_mask = (~is_focal) & (~is_pad)
+
+                # Handle batch dimensions for metadata
+                if batch_node_ids.ndim > 1:
+                    current_ids = batch_node_ids[i]
+                    current_lifespan = batch_is_lifespan[i]
+                    current_in_deg = batch_in_degree[i]
+                    current_out_deg = batch_out_degree[i]
+                else:
+                    current_ids = batch_node_ids[i]
+                    current_lifespan = batch_is_lifespan[i]
+                    current_in_deg = batch_in_degree[i]
+                    current_out_deg = batch_out_degree[i]
+
+                # Safety check for size mismatches
+                if len(valid_mask) != pair_to_nodes_attn.shape[1]:
+                    min_len = min(len(valid_mask), pair_to_nodes_attn.shape[1])
+                    valid_mask = valid_mask[:min_len]
+                    p_scores_i = pair_to_nodes_attn[i][:min_len]
+                    a_scores_i = all_to_nodes_attn[i][:min_len]
+                    current_ids = current_ids[:min_len]
+                    current_lifespan = current_lifespan[:min_len]
+                    current_in_deg = current_in_deg[:min_len]
+                    current_out_deg = current_out_deg[:min_len]
+                else:
+                    p_scores_i = pair_to_nodes_attn[i]
+                    a_scores_i = all_to_nodes_attn[i]
+
+                valid_indices = torch.nonzero(valid_mask).squeeze()
+                if valid_indices.numel() == 0:
+                    continue
+
+                p_scores = p_scores_i[valid_mask]
+                a_scores = a_scores_i[valid_mask]
+                target_ids = current_ids[valid_mask]
+                target_lifespan = current_lifespan[valid_mask]
+                target_in_deg = current_in_deg[valid_mask]
+                target_out_deg = current_out_deg[valid_mask]
+
+                for node_id, p_score, a_score, is_life, in_d, out_d in zip(target_ids, p_scores, a_scores,
+                                                                           target_lifespan, target_in_deg,
+                                                                           target_out_deg):
+                    nid = int(node_id) if hasattr(node_id, 'item') else node_id
+
+                    pair_attn_sum[nid] += p_score.item()
+                    all_tokens_attn_sum[nid] += a_score.item()
+                    node_occurrence_count[nid] += 1
+
+                    # Cache static properties (Idempotent updates)
+                    if nid not in node_lifespan_status:
+                        node_lifespan_status[nid] = bool(is_life)
+                    if nid not in node_in_degree:
+                        node_in_degree[nid] = int(in_d)
+                    if nid not in node_out_degree:
+                        node_out_degree[nid] = int(out_d)
+
+    final_pair_stats = []
+    final_all_stats = []
+
+    for nid, count in node_occurrence_count.items():
+        if count < min_occurrences:
+            continue
+
+        avg_pair = pair_attn_sum[nid] / count
+        avg_all = all_tokens_attn_sum[nid] / count
+        is_lifespan = node_lifespan_status.get(nid, False)
+        in_d = node_in_degree.get(nid, 0)
+        out_d = node_out_degree.get(nid, 0)
+
+        name = str(nid)
+        if id_to_name_map and nid in id_to_name_map:
+            str_name = id_to_name_map[nid]
+            name = f"{str_name} ({nid})"
+
+        # Store stats tuples
+        final_pair_stats.append((name, avg_pair, count, is_lifespan, in_d, out_d))
+        final_all_stats.append((name, avg_all, count, is_lifespan, in_d, out_d))
+
+    final_pair_stats.sort(key=lambda x: x[1], reverse=True)
+    final_all_stats.sort(key=lambda x: x[1], reverse=True)
+
+    def print_table(title, data):
+        base_names = []
+        print(f"\n=== {title} (Top {top_k}) ===")
+        # Header with new columns
+        print(
+            f"{'Rank':<5} | {'Node Name/ID':<30} | {'Avg Attn':<12} | {'Occur':<6} | {'Aging':<6} | {'In-Deg':<6} | {'Out-Deg':<6}")
+        print("-" * 100)
+        for rank, (name, score, count, is_ls, in_d, out_d) in enumerate(data[:top_k], 1):
+            ls_str = "YES" if is_ls else "No"
+            print(f"{rank:<5} | {name:<30} | {score:.6f}     | {count:<6} | {ls_str:<6} | {in_d:<6} | {out_d:<6}")
+            base_name = name.split(' ')[0]
+            base_names.append(base_name)
+        print(f"Gene names: {', '.join(base_names)}")
+
+    print_table("Highest Attention from [PAIR] Token", final_pair_stats)
+    print_table("Highest Attention from ALL Tokens (Avg Incoming)", final_all_stats)
+
+    print("\n=== Dataset Composition Stats ===")
+    total_unique_nodes = len(node_lifespan_status)
+    total_lifespan_nodes = sum(node_lifespan_status.values())
+
+    if total_unique_nodes > 0:
+        lifespan_fraction = total_lifespan_nodes / total_unique_nodes
+        print(f"Total Unique Nodes Analyzed: {total_unique_nodes}")
+        print(f"Total Lifespan Genes:        {total_lifespan_nodes}")
+        print(f"Fraction of Lifespan Genes:  {lifespan_fraction:.4f} ({lifespan_fraction * 100:.2f}%)")
+    else:
+        print("No valid nodes encountered to calculate stats.")
+    print("=================================\n")
