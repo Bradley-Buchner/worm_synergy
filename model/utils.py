@@ -9,6 +9,23 @@ from model.eval import *
 from model.models import NaiveBaseline, UniformBaseline
 
 
+def train_test_split_simple(processed_data, train_frac=0.8, seed=23):
+    """
+    Splits data into train/test sets by shuffling.
+    This method assumes each item in processed_data corresponds to a unique pair.
+    """
+    random.seed(seed)
+    torch.manual_seed(seed)
+
+    shuffled_data = processed_data[:]
+    random.shuffle(shuffled_data)
+
+    split_idx = int(len(shuffled_data) * train_frac)
+    train_data = shuffled_data[:split_idx]
+    test_data = shuffled_data[split_idx:]
+
+    return train_data, test_data
+
 
 def train_epoch_trans(model, dataloader, label_name, optimizer, criterion, device, randomize_labels=False):
     model.train()
