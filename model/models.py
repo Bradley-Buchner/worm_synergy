@@ -131,7 +131,7 @@ class RelationalPairClassifierGraphormer(nn.Module):
             self.pretrained_node_embedding.weight.data[self.num_nodes].zero_()
             self.pretrained_node_embedding.weight.requires_grad = self.fine_tune_gene_emb  # set True if you want fine-tuning
 
-        # self.dist_uv_embedding = nn.Embedding(self.structural_max_dist + 1, self.d_model)
+        self.dist_uv_embedding = nn.Embedding(self.structural_max_dist + 1, self.d_model)
         self.in_degree_embedding = nn.Embedding(self.num_degree_bins, self.d_model)
         self.out_degree_embedding = nn.Embedding(self.num_degree_bins, self.d_model)
         self.lifespan_dist_embedding = nn.Embedding(self.max_lifespan_dist + 1, self.d_model,
@@ -182,7 +182,7 @@ class RelationalPairClassifierGraphormer(nn.Module):
         # Node distance to u/v
         d_u_clamped = torch.clamp(batch['dist_to_u'], max=self.structural_max_dist)
         d_v_clamped = torch.clamp(batch['dist_to_v'], max=self.structural_max_dist)
-        # structural_embs = (self.dist_uv_embedding(d_u_clamped) + self.dist_uv_embedding(d_v_clamped)) / 2
+        structural_embs = (self.dist_uv_embedding(d_u_clamped) + self.dist_uv_embedding(d_v_clamped)) / 2
 
         # Node degree
         degree_embs = (self.in_degree_embedding(batch['in_degree_binned']) +
@@ -210,10 +210,10 @@ class RelationalPairClassifierGraphormer(nn.Module):
         gene_embs = self.node_identity_embedding(batch['node_ids'])
 
         # --- Combine all node embeddings via summation ---
-        # node_features = (gene_embs + structural_embs + degree_embs +
-        #                  node_pert_embs + lifespan_dist_embs)
-        node_features = (gene_embs + degree_embs +
+        node_features = (gene_embs + structural_embs + degree_embs +
                          node_pert_embs + lifespan_dist_embs)
+        # node_features = (gene_embs + degree_embs +
+        #                  node_pert_embs + lifespan_dist_embs)
 
         # Logic for pre-trained gene embeddings option
         if self.pretrained_gene_embs_tensor is not None:
@@ -243,6 +243,7 @@ class RelationalPairClassifierGraphormer(nn.Module):
         # 1. Bias by the pairwise distance between nodes
         padded_dist = F.pad(batch['pairwise_dist'], (1, 0, 1, 0), value=self.max_spd + 1)
         pairwise_bias = self.pairwise_dist_embedding(padded_dist)
+        pairwise_bias = pairwise_bias.permute(0, 3, 1, 2)
 
         # # 2. Bias by the average edge type connecting nodes
         # avg_edge_types_padded = F.pad(batch['average_edge_type_encoding'], (1, 0, 1, 0), value=self.num_edge_types)
@@ -272,8 +273,10 @@ class RelationalPairClassifierGraphormer(nn.Module):
         # 5. Bias the attention given by [PAIR] based on node proximity to u and v
         # Calculate the bias values for the N nodes
         # (B, N, nhead)
-        cls_node_biases = (self.dist_uv_bias_embedding(batch['dist_to_u']) +
-                           self.dist_uv_bias_embedding(batch['dist_to_v'])) / 2
+        # d_u_clamped = torch.clamp(batch['dist_to_u'], max=self.structural_max_dist)
+        # d_v_clamped = torch.clamp(batch['dist_to_v'], max=self.structural_max_dist)
+        cls_node_biases = (self.dist_uv_bias_embedding(d_u_clamped) +
+                           self.dist_uv_bias_embedding(d_v_clamped)) / 2
 
         # We need a full bias matrix (B, nhead, N+1, N+1) initialized to zero
         B, N = batch['node_ids'].shape
