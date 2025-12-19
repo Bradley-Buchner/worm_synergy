@@ -25,14 +25,21 @@ Together, these inputs provide both the network context in which genes interact 
 
 
 ### Representation
-* Pair subgraphs:
-  * node set: union of each perturbed gene's/member's one-hop neighborhood
-  * all edges filled in from the original graph/network
-* Node-level features/attributes:
-  * in-degree and out-degree
-  * proximity (hop distance) from each perturbed gene
-  * proximity (hop distance) to the nearest aging-associated gene (zero if associated with aging itself)
-  * perturbation status and type: if perturbed, what kind of pertubation? => ("knockdown", "knockout", or "overexpression")
+Each gene pair is represented as a localized subgraph from the global interaction network.
+
+**Pair subgraphs**
+* Node set: The union of the one-hop neighborhoods of both perturbed genes
+* Edge set: All edges induced from the original interaction network, preserving directionality and interaction type
+
+**Node-level features**
+
+Each node within a subgraph is annotated with biologically and topologically motivated attributes:
+* In-degree and out-degree
+* Proximity (hop distance) to each perturbed gene
+* Proximity (hop distance) to the nearest aging-associated gene (zero for aging-associated genes)
+* Perturbation status and perturbation type (knockdown, knockout, or overexpression)
+
+This representation encodes local network structure while also injecting relevant biological context for the prediction task.
 
 ### Model
 Subgraph encoder => classification head
