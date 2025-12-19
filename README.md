@@ -9,12 +9,14 @@ This section outlines the conceptual blueprint of the model, specifying the info
 The model integrates two primary data sources:
 
 **1. Genetic interaction network (from WormBase)**
+
 A directed, heterogeneous interaction network representing known molecular and genetic relationships in C. elegans.
    * 11,493 nodes (genes/proteins) and 90,364 edges
    * 3 types of edges (interactions): genetic, physical, and regulatory
    * Edges are directed to reflect causal relationships where applicable; non-causal interactions are represented by bidirectional edges.
 
 **2. Double mutant lifespan assays (from SynergyAge)**
+
 A curated collection of lifespan measurements for combinatorial genetic interventions in *C. elegans*
 * 1,458 double mutant experiments, 801 unique double mutants (i.e., gene perturbation pairs)
 * Each experiment is categorized as resulting in an antagonistic, additive, or synergistic effect on lifespan
