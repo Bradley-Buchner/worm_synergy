@@ -7,6 +7,7 @@ This section outlines the conceptual blueprint of the model, specifying the info
 
 ### Input
 The model integrates two primary data sources:
+
 **1. Genetic interaction network (from WormBase)**
 A directed, heterogeneous interaction network representing known molecular and genetic relationships in C. elegans.
    * 11,493 nodes (genes/proteins) and 90,364 edges
