@@ -28,8 +28,8 @@ Together, these inputs provide both the network context in which genes interact 
 Each gene pair is represented as a localized subgraph from the global interaction network.
 
 **Pair subgraphs**
-* Node set: The union of the one-hop neighborhoods of both perturbed genes
-* Edge set: All edges induced from the original interaction network, preserving directionality and interaction type
+* **Node set:** The union of the one-hop neighborhoods of both perturbed genes
+* **Edge set:** All edges induced from the original interaction network, preserving directionality and interaction type
 
 **Node-level features**
 
@@ -42,24 +42,35 @@ Each node within a subgraph is annotated with biologically and topologically mot
 This representation encodes local network structure while also injecting relevant biological context for the prediction task.
 
 ### Model
-Subgraph encoder => classification head
-* Subgraph encoder:
-  * graph transformer:
-    * treats nodes as tokens, encodes graph structure into the attention mechanism, learns a summary representation of the subgraph using a [CLS] token.
-    * Learns 8-dim embeddings for each type of token attribute (degree, aging proximity, etc.), which are summed together to form a single 8-dim representation for each token
-    * Learns how to aggregate all token representations in a subgraph
-    * biases attention between nodes to reflect causality (by enforcing attention to flow only from ancestors to descendents), proximity (with a learnable bias based on hop distance), and biological interaction semantics (by learning a unique value projection for each interaction type)
-* Classification head:
-  * MLP with 1 hidden layer
-  * output is 3-dim: probabilities of antagonistic, additive, and synergistic interactions  
+The model maps pair-centered subgraphs to predicted interaction outcomes using a two-stage architecture: a subgraph encoder followed by a classification head.
+
+**Subgraph encoder**
+
+A graph transformer is used to encode each subgraph into a fixed-dimensional vector representation.
+* Nodes are treated as tokens (analogous to how LLMs tokenize sentences into words), with graph structure incorporated directly into the attention mechanism.
+* Each node attribute (e.g., degree, aging proximity, perturbation status) is embedded into a small fixed-dimensional vector; these embeddings are learned and summed to produce a single representation for each node/token.
+* A synthetic [CLS] node added to each subgraph learns to aggregate information from all other nodes to form another small fixed-dimensional summary representation of the subgraph.
+
+The calculation of attention between nodes is intentionally biased to reflect:
+* **Causality:** Nodes are enforced to attend only to their descendents in the directed graph.
+* **Proximity:** Learnable biases based on hop distance between nodes.
+* **Interaction semantics:** Separate value projections are learned for each interaction type (genetic, physical, regulatory).
+
+This design imposes biologically motivated inductive biases while allowing the model to learn how information relevant to aging should flow through local neighborhoods and be aggregated.
+
+**Classification head**
+
+A multilayer perceptron with one hidden layer takes a CLS token's subgraph representation as input and outputs a 3-dimensional probability vector corresponding to antagonistic, additive, and synergistic interaction likelihoods. 
 
 ### Learning Objective
-Minimize the KL Divergence between observed and predicted relative interaction type frequencies, which can be thought of as soft classification labels. 
+The model is trained to minimize the Kullback–Leibler (KL) divergence between predicted and observed relative interaction-type frequencies for each gene pair. This formulation treats relative interaction-type frequencies as soft classification labels, and is an example of label distribution learning.
+
+*Note: To account for the diverse quantity of experiments recorded for each unique double mutant and, as a result, varying evidence and confidence levels, observed interaction-type counts were smoothed via Bayesian smoothing with a maximally ignorant prior that assumed pseudocounts of 1 for each interaction type (i.e., assumes all types are equally likely).*
+
 
 ### Output
-Predicted relative interaction type frequencies for any pair of gene perturbations. 
+For any pair of gene perturbations, the model outputs predicted relative frequencies for antagonistic, additive, and synergistic lifespan effects. These predictions can be interpreted as a probability distribution over expected genetic interaction effects, and can be used to prioritize candidate gene pairs for experimental validation.
 
-### 
 
 
 TO-DO:
