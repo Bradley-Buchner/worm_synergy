@@ -131,7 +131,7 @@ class RelationalPairClassifierGraphormer(nn.Module):
             self.pretrained_node_embedding.weight.data[self.num_nodes].zero_()
             self.pretrained_node_embedding.weight.requires_grad = self.fine_tune_gene_emb  # set True if you want fine-tuning
 
-        self.dist_uv_embedding = nn.Embedding(self.structural_max_dist + 1, self.d_model)
+        # self.dist_uv_embedding = nn.Embedding(self.structural_max_dist + 1, self.d_model)
         self.in_degree_embedding = nn.Embedding(self.num_degree_bins, self.d_model)
         self.out_degree_embedding = nn.Embedding(self.num_degree_bins, self.d_model)
         self.lifespan_dist_embedding = nn.Embedding(self.max_lifespan_dist + 1, self.d_model,
@@ -150,6 +150,7 @@ class RelationalPairClassifierGraphormer(nn.Module):
         self.pairwise_dist_embedding = nn.Embedding(self.max_spd + 1, self.nhead, padding_idx=self.max_spd)
         self.edge_type_embedding = nn.Embedding(self.num_edge_types + 1, self.nhead, padding_idx=self.num_edge_types)
         self.mutual_interactor_bias_emb = nn.Embedding(2, self.nhead)
+        self.dist_uv_bias_embedding = nn.Embedding(self.structural_max_dist + 1, self.nhead)
         # self.lifespan_bias_emb = nn.Embedding(2, self.nhead)
 
         # --- Initialize a nn.Linear projection for each unique edge type in the graph ---
@@ -181,7 +182,7 @@ class RelationalPairClassifierGraphormer(nn.Module):
         # Node distance to u/v
         d_u_clamped = torch.clamp(batch['dist_to_u'], max=self.structural_max_dist)
         d_v_clamped = torch.clamp(batch['dist_to_v'], max=self.structural_max_dist)
-        structural_embs = (self.dist_uv_embedding(d_u_clamped) + self.dist_uv_embedding(d_v_clamped)) / 2
+        # structural_embs = (self.dist_uv_embedding(d_u_clamped) + self.dist_uv_embedding(d_v_clamped)) / 2
 
         # Node degree
         degree_embs = (self.in_degree_embedding(batch['in_degree_binned']) +
@@ -209,7 +210,9 @@ class RelationalPairClassifierGraphormer(nn.Module):
         gene_embs = self.node_identity_embedding(batch['node_ids'])
 
         # --- Combine all node embeddings via summation ---
-        node_features = (gene_embs + structural_embs + degree_embs +
+        # node_features = (gene_embs + structural_embs + degree_embs +
+        #                  node_pert_embs + lifespan_dist_embs)
+        node_features = (gene_embs + degree_embs +
                          node_pert_embs + lifespan_dist_embs)
 
         # Logic for pre-trained gene embeddings option
@@ -239,38 +242,58 @@ class RelationalPairClassifierGraphormer(nn.Module):
         # --- Build the attention biases ---
         # 1. Bias by the pairwise distance between nodes
         padded_dist = F.pad(batch['pairwise_dist'], (1, 0, 1, 0), value=self.max_spd + 1)
-        pairwise_dist_bias = self.pairwise_dist_embedding(padded_dist)
+        pairwise_bias = self.pairwise_dist_embedding(padded_dist)
 
-        # 2. Bias by the average edge type connecting nodes
-        avg_edge_types_padded = F.pad(batch['average_edge_type_encoding'], (1, 0, 1, 0), value=self.num_edge_types)
-        floor_types = torch.floor(avg_edge_types_padded).long()
-        ceil_types = torch.clamp(torch.ceil(avg_edge_types_padded).long(), max=self.num_edge_types)
-        weights = avg_edge_types_padded - floor_types.float()
-        floor_embs = self.edge_type_embedding(floor_types)
-        ceil_embs = self.edge_type_embedding(ceil_types)
-        interpolated_edge_bias = (1.0 - weights.unsqueeze(-1)) * floor_embs + weights.unsqueeze(
-            -1) * ceil_embs
+        # # 2. Bias by the average edge type connecting nodes
+        # avg_edge_types_padded = F.pad(batch['average_edge_type_encoding'], (1, 0, 1, 0), value=self.num_edge_types)
+        # floor_types = torch.floor(avg_edge_types_padded).long()
+        # ceil_types = torch.clamp(torch.ceil(avg_edge_types_padded).long(), max=self.num_edge_types)
+        # weights = avg_edge_types_padded - floor_types.float()
+        # floor_embs = self.edge_type_embedding(floor_types)
+        # ceil_embs = self.edge_type_embedding(ceil_types)
+        # interpolated_edge_bias = (1.0 - weights.unsqueeze(-1)) * floor_embs + weights.unsqueeze(
+        #     -1) * ceil_embs
 
         # 3. Bias by the lifespan-association status (0/1) of the attention "sender" (key-only bias)
         # cls_pad = torch.zeros(B, 1, dtype=batch['is_lifespan_gene'].dtype,
         #                       device=batch['is_lifespan_gene'].device)
         # padded_lifespan_flags = torch.cat([cls_pad, batch['is_lifespan_gene']], dim=1)
         # lifespan_bias = self.lifespan_bias_emb(padded_lifespan_flags)
-        # lifespan_attn_bias = lifespan_bias.permute(0, 2, 1).unsqueeze(2)
+        # lifespan_bias = lifespan_bias.permute(0, 2, 1).unsqueeze(2)
 
-        # 4. Bias by the mutual interactor status (0/1) of the attention "sender" (key-only bias)
-        # Create a (B, 1) tensor of zeros (for the [CLS] token, which is not a mutual interactor)
-        cls_pad = torch.zeros(B, 1, dtype=batch['is_mutual_interactor'].dtype,
-                              device=batch['is_mutual_interactor'].device)
-        padded_mutual_flags = torch.cat([cls_pad, batch['is_mutual_interactor']], dim=1)
-        mutual_bias = self.mutual_interactor_bias_emb(padded_mutual_flags)
-        mutual_attn_bias = mutual_bias.permute(0, 2, 1).unsqueeze(2)
+        # # 4. Bias by the mutual interactor status (0/1) of the attention "sender" (key-only bias)
+        # # Create a (B, 1) tensor of zeros (for the [CLS] token, which is not a mutual interactor)
+        # cls_pad = torch.zeros(B, 1, dtype=batch['is_mutual_interactor'].dtype,
+        #                       device=batch['is_mutual_interactor'].device)
+        # padded_mutual_flags = torch.cat([cls_pad, batch['is_mutual_interactor']], dim=1)
+        # mutual_bias = self.mutual_interactor_bias_emb(padded_mutual_flags)
+        # mutual_bias = mutual_bias.permute(0, 2, 1).unsqueeze(2)
+
+        # 5. Bias the attention given by [PAIR] based on node proximity to u and v
+        # Calculate the bias values for the N nodes
+        # (B, N, nhead)
+        cls_node_biases = (self.dist_uv_bias_embedding(batch['dist_to_u']) +
+                           self.dist_uv_bias_embedding(batch['dist_to_v'])) / 2
+
+        # We need a full bias matrix (B, nhead, N+1, N+1) initialized to zero
+        B, N = batch['node_ids'].shape
+        total_tokens = N + 1
+        cls_bias_matrix = torch.zeros(B, self.nhead, total_tokens, total_tokens,
+                                      device=node_features.device)
+
+        cls_node_biases = cls_node_biases.permute(0, 2, 1)
+
+        # Apply to the first row (the CLS token's attention to all nodes)
+        # Index 0 is the [PAIR] token, Indices 1: are the nodes
+        cls_bias_matrix[:, :, 0, 1:] = cls_node_biases
 
         # Add the biases together
-        combined_pairwise_bias = pairwise_dist_bias + interpolated_edge_bias
-        pairwise_attn_bias = combined_pairwise_bias.permute(0, 3, 1, 2)
-        # attention_bias = pairwise_attn_bias
-        attention_bias = pairwise_attn_bias + mutual_attn_bias # + lifespan_attn_bias
+        # combined_pairwise_bias = pairwise_dist_bias + interpolated_edge_bias
+        # pairwise_bias = combined_pairwise_bias.permute(0, 3, 1, 2)
+        # attention_bias = pairwise_bias
+        # attention_bias = pairwise_bias + mutual_bias # + lifespan_bias
+        attention_bias = pairwise_bias + cls_bias_matrix
+
 
         # --- Prepare pairwise relation types for transformer encoder ---
         # Round the average edge type matrix to determine what value projection to use for each nodes pair
