@@ -5,10 +5,7 @@ This repository contains the scripts and notebooks for the model known as Synerg
 [insert schematic]
 
 ## Using SynergyGT
-* Two python jupyter notebooks that can easily be run in Google Colab (click the button at the top)
-* Located in "/notebooks"
-* One notebook (model_demo.ipynb) walks through the process of building and training a SynergyGT model and evaluating its outputs/predictions
-* Another notebook (model_exploration.ipynb) lets you interact with a SynergyGT model and test it on any gene or gene pair of interest
+To use/try out SynergyGT, there are two jupyter notebooks in the `/notebooks` directory that can easily be run in Google Colab. The first, named "model_demo.ipynb", walks you through the process of building and training a SynergyGT model and evaluating its outputs/predictions. The second, named "model_exploration.ipynb", lets you interact with a trained SynergyGT model and test it on any gene or gene pair of interest. Click the "Run in Colab" button at the top of these notebooks to run them yourself. 
 
 ## Model Schema
 This section outlines the conceptual blueprint of the model, specifying the information it consumes, how that information is represented, what the model is trained to predict, and the assumptions under which its learns.
