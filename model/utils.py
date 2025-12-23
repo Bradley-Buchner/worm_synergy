@@ -533,144 +533,76 @@ def naive_baseline(model, train_loader, test_loader, loss_fn, baseline_type='mea
 
     return test_results
 
-
-def visualize_synergy_landscape_old(model, dataloader, color_by='class', device='mps'):
+def _get_representations(model, dataloader, device):
+    """Helper to extract representations and labels from a dataloader."""
     model.eval()
     model.to(device)
+    reps, labels = [], []
 
-    representations = []
-    labels = []
-
-    print("Extracting pair representations...")
     with torch.no_grad():
         for batch in dataloader:
             for k, v in batch.items():
                 if torch.is_tensor(v):
                     batch[k] = v.to(device)
-
             _, pair_rep = model(batch, return_representation=True)
-            representations.append(pair_rep.cpu().numpy())
-
+            reps.append(pair_rep.cpu().numpy())
             labels.append(batch['target_soft_smoothed'].cpu().numpy())
 
-    X = np.concatenate(representations, axis=0)
+    return np.concatenate(reps, axis=0), np.concatenate(labels, axis=0)
 
-    print(f"Running t-SNE on {X.shape[0]} pairs...")
-    tsne = TSNE(n_components=2, perplexity=30, random_state=23, init='pca', learning_rate='auto')
-    X_embedded = tsne.fit_transform(X)
+def visualize_synergy_landscape(model, train_loader, test_loader, method='tsne', device='mps'):
+    # 1. Extract data
+    print("Extracting [PAIR] representations...")
+    X_train, y_train = _get_representations(model, train_loader, device)
+    X_test, y_test = _get_representations(model, test_loader, device)
 
-    plt.figure(figsize=(10, 8))
+    # Combine for a joint dimensionality reduction (ensures same space)
+    X_combined = np.concatenate([X_train, X_test], axis=0)
+    n_train = X_train.shape[0]
 
-    # Check if we have labels to plot
-    if len(labels) > 0:
-        y_raw = np.concatenate(labels, axis=0)
-        df = pd.DataFrame({'x': X_embedded[:, 0], 'y': X_embedded[:, 1]})
-
-        df['Synergy Frequency'] = y_raw[:, 2]
-
-        if color_by == 'class':
-            y_indices = np.argmax(y_raw, axis=1)
-            classes = ['Synergistic' if idx == 2 else 'Not Synergistic' for idx in y_indices]
-            df['Class'] = classes
-
-            # Sort by frequency so larger/synergistic dots plot on top of smaller ones
-            df = df.sort_values(by='Synergy Frequency')
-
-            sns.scatterplot(
-                data=df, x='x', y='y',
-                hue='Class',               # Color determined by Class
-                # size='Synergy Frequency',      # Size determined by Frequency
-                # sizes=(10, 200),                # Range: Small dots (low freq) -> Big dots (high freq)
-                palette={'Synergistic': 'red', 'Not Synergistic': '#eeeeee'}, # Red vs Dark Grey
-                alpha=0.85,
-                edgecolor='none'
-            )
-            plt.title("t-SNE of [PAIR] Token Representation (Training Set)")
-
-    else:
-        # Fallback if no labels exist
-        plt.scatter(X_embedded[:, 0], X_embedded[:, 1], alpha=0.5, s=20, c='steelblue')
-        plt.title("Synergy Landscape (Unlabeled)")
-
-    plt.xlabel("t-SNE 1")
-    plt.ylabel("t-SNE 2")
-
-    # Visual cleanup
-    sns.despine()
-    plt.grid(False) # Clean look
-    plt.show()
-
-def visualize_synergy_landscape(model, dataloader, method='tsne', color_by='class', device='mps'):
-    """
-    Visualizes synergy landscapes using either t-SNE or UMAP.
-
-    Args:
-        method (str): Dimensionality reduction method ('tsne' or 'umap').
-    """
-    model.eval()
-    model.to(device)
-
-    representations = []
-    labels = []
-
-    print("Extracting pair representations...")
-    with torch.no_grad():
-        for batch in dataloader:
-            for k, v in batch.items():
-                if torch.is_tensor(v):
-                    batch[k] = v.to(device)
-
-            _, pair_rep = model(batch, return_representation=True)
-            representations.append(pair_rep.cpu().numpy())
-            labels.append(batch['target_soft_smoothed'].cpu().numpy())
-
-    X = np.concatenate(representations, axis=0)
-
-    # --- Dimensionality Reduction Logic ---
+    # 2. Run Dimensionality Reduction
     if method.lower() == 'tsne':
-        print(f"Running t-SNE on {X.shape[0]} pairs...")
+        print(f"Running t-SNE on {X_combined.shape[0]} total pairs... ({X_train.shape[0]} train, {X_test.shape[0]} test)")
         reducer = TSNE(n_components=2, perplexity=30, random_state=23, init='pca', learning_rate='auto')
-        X_embedded = reducer.fit_transform(X)
+        X_emb = reducer.fit_transform(X_combined)
         label_prefix = "t-SNE"
     elif method.lower() == 'umap':
-        print(f"Running UMAP on {X.shape[0]} pairs...")
+        print(f"Running UMAP on {X_combined.shape[0]} total pairs... ({X_train.shape[0]} train, {X_test.shape[0]} test)")
         reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, n_components=2, random_state=23)
-        X_embedded = reducer.fit_transform(X)
+        X_emb = reducer.fit_transform(X_combined)
         label_prefix = "UMAP"
     else:
-        raise ValueError("Method must be either 'tsne' or 'umap'")
+        raise ValueError("Method must be 'tsne' or 'umap'")
 
-    plt.figure(figsize=(10, 8))
+    X_train_emb = X_emb[:n_train]
+    X_test_emb = X_emb[n_train:]
 
-    if len(labels) > 0:
-        y_raw = np.concatenate(labels, axis=0)
-        df = pd.DataFrame({'x': X_embedded[:, 0], 'y': X_embedded[:, 1]})
-        df['Synergy Frequency'] = y_raw[:, 2]
+    # 3. Plotting
+    fig, axes = plt.subplots(1, 2, figsize=(18, 7), sharex=True, sharey=True)
+    datasets = [
+        (X_train_emb, y_train, "Training Set", axes[0]),
+        (X_test_emb, y_test, "Testing Set", axes[1])
+    ]
 
-        if color_by == 'class':
-            y_indices = np.argmax(y_raw, axis=1)
-            classes = ['Synergistic' if idx == 2 else 'Not Synergistic' for idx in y_indices]
-            df['Class'] = classes
+    for X_plot, y_raw, title, ax in datasets:
+        df = pd.DataFrame({'x': X_plot[:, 0], 'y': X_plot[:, 1]})
+        y_indices = np.argmax(y_raw, axis=1)
+        df['Class'] = ['Synergistic' if idx == 2 else 'Not Synergistic' for idx in y_indices]
+        df['Frequency'] = y_raw[:, 2]
+        df = df.sort_values(by='Frequency')  # Plot synergistic on top
 
-            # Sort by frequency so synergistic dots plot on top
-            df = df.sort_values(by='Synergy Frequency')
+        sns.scatterplot(
+            data=df, x='x', y='y', hue='Class', ax=ax,
+            palette={'Synergistic': 'red', 'Not Synergistic': '#eeeeee'},
+            alpha=0.7, edgecolor='none', s=15, legend=True
+        )
 
-            sns.scatterplot(
-                data=df, x='x', y='y',
-                hue='Class',
-                palette={'Synergistic': 'red', 'Not Synergistic': '#eeeeee'},
-                alpha=0.85,
-                edgecolor='none'
-            )
-            plt.title(f"{label_prefix} of [PAIR] Token Representation")
-    else:
-        plt.scatter(X_embedded[:, 0], X_embedded[:, 1], alpha=0.5, s=20, c='steelblue')
-        plt.title(f"{label_prefix} Synergy Landscape (Unlabeled)")
+        ax.set_title(f"[PAIR] Representation ({label_prefix}) \n {title}", fontsize=14)
+        ax.set_xlabel(f"{label_prefix} 1")
+        ax.set_ylabel(f"{label_prefix} 2")
+        sns.despine(ax=ax)
 
-    plt.xlabel(f"{label_prefix} 1")
-    plt.ylabel(f"{label_prefix} 2")
-    sns.despine()
-    plt.grid(False)
+    plt.tight_layout()
     plt.show()
 
 
