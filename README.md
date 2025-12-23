@@ -68,7 +68,7 @@ This design imposes biologically motivated inductive biases while allowing the m
 
 A multilayer perceptron with one hidden layer takes a CLS token's subgraph representation as input and outputs a 3-dimensional probability vector corresponding to antagonistic, additive, and synergistic interaction likelihoods. 
 
-### Learning Objective
+#### Learning Objective
 The model is trained to minimize the Kullback–Leibler (KL) divergence between predicted and observed relative interaction-type frequencies for each gene pair. This formulation treats relative interaction-type frequencies as soft classification labels, and is an example of label distribution learning.
 
 *Note: To account for the diverse quantity of experiments recorded for each unique double mutant and, as a result, varying evidence and confidence levels, observed interaction-type counts were smoothed via Bayesian smoothing with a maximally ignorant prior that assumed pseudocounts of 1 for each interaction type (i.e., assumes all types are equally likely).*
