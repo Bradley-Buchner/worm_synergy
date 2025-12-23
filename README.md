@@ -2,7 +2,9 @@
 
 This repository contains the scripts and notebooks for the model known as SynergyGT, which serves as a computational tool for the Levine Lab and its research on the genetics of aging in the roundworm *C. elegans*. Although individual gene perturbations associated with aging and longevity have been well-studied, understanding/solving aging requires treating it as a complex, emergent phenotype driven by nonlinear genetic interactions. Synergistic gene interactions offer a view into the complexity of aging, and by predicting/learning to identify synergy in the genetic interaction network with deep learning we can better understand how aging/longevity emerges. SynergyGT does this by combining knowledge of gene-aging associations and a network of mechanistic gene-gene interactions to learn features of known synergistic gene pairs that distinguish them from those that are not. With a design inspired by biology and modern LLMs, SynergyGT can predict synergistic interactions at a level significantly better than baseline. As a result, the model can be used to characterize the likelihood of synergy between any pair of genes, which could lead to the discovery of novel synergistic interactions and a better understanding of the genetic landscape of aging. 
 
-![image alt](https://github.com/Bradley-Buchner/worm_synergy/blob/c0b17d9640b57107e96dab948c50fba4d896430f/figures/synergy_gt_schema.jpeg)
+<p align="center">
+  <img src="https://github.com/Bradley-Buchner/worm_synergy/blob/c0b17d9640b57107e96dab948c50fba4d896430f/figures/synergy_gt_schema.jpeg" width="600">
+</p>
 
 ## Using SynergyGT
 To use/try out SynergyGT, there are two jupyter notebooks in the `/notebooks` directory that can easily be run in Google Colab. The first, named "model_demo.ipynb", walks you through the process of building and training a SynergyGT model and evaluating its outputs/predictions. The second, named "model_exploration.ipynb", lets you interact with a trained SynergyGT model and test it on any gene or gene pair of interest. Click the "Run in Colab" button at the top of these notebooks to run them yourself. 
