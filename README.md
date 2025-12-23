@@ -1,11 +1,9 @@
 # SynergyGT: a Graph Transformer for Predicting Gene Synergy in *C. elegans* Aging
 
 This repository contains the scripts and notebooks for the model known as SynergyGT, which serves as a computational tool for the Levine Lab and its research on the genetics of aging in the roundworm *C. elegans*. Although individual gene perturbations associated with aging and longevity have been well-studied, understanding/solving aging requires treating it as a complex, emergent phenotype driven by nonlinear genetic interactions. Synergistic gene interactions offer a view into the complexity of aging, and by predicting/learning to identify synergy in the genetic interaction network with deep learning we can better understand how aging/longevity emerges. SynergyGT does this by combining knowledge of gene-aging associations and a network of mechanistic gene-gene interactions to learn features of known synergistic gene pairs that distinguish them from those that are not. With a design inspired by biology and modern LLMs, SynergyGT can predict synergistic interactions at a level significantly better than baseline. As a result, the model can be used to characterize the likelihood of synergy between any pair of genes, which could lead to the discovery of novel synergistic interactions and a better understanding of the genetic landscape of aging. 
-
 <p align="center">
   <img src="https://github.com/Bradley-Buchner/worm_synergy/blob/06b4c0e873074db633e62bfa9f4ade581686c01f/figures/synergy_gt_schema_readme.jpg" width="800">
 </p>
-
 ## Using SynergyGT
 To use/try out SynergyGT, there are two jupyter notebooks in the `/notebooks` directory that can easily be run in Google Colab. The first, named "model_demo.ipynb", walks you through the process of building and training a SynergyGT model and evaluating its outputs/predictions. The second, named "model_exploration.ipynb", lets you interact with a trained SynergyGT model and test it on any gene or gene pair of interest. Click the "Run in Colab" button at the top of these notebooks to run them yourself. 
 
