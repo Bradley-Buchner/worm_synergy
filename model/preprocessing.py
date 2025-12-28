@@ -154,11 +154,7 @@ def bin_logarithmically(degrees, max_val, num_bins=4):
     return binned_degrees
 
 
-def preprocess_and_save_subgraphs_graphormer(
-        data,
-        configs,
-        degree_epsilon=1.0
-):
+def preprocess_and_save_subgraphs_graphormer(data, configs, degree_epsilon=1.0):
     """
     Generates subgraphs comprising the combined one-hop neighborhood of paired genes
 
@@ -190,7 +186,7 @@ def preprocess_and_save_subgraphs_graphormer(
     print(f"Loading pre-computed attributes from {attributes_dir}...")
     try:
         spd_tensor = torch.load(os.path.join(attributes_dir, 'spd_matrix.pt'), weights_only=False, map_location=device)
-        path_sum_tensor = torch.load(os.path.join(attributes_dir, 'path_sum_matrix.pt'), weights_only=False,
+        path_sum_tensor = torch.load(os.path.join(attributes_dir, 'avg_path_sum_matrix.pt'), weights_only=False,
                                      map_location=device)
         in_degree_tensor = torch.load(os.path.join(attributes_dir, 'in_degree.pt'), weights_only=False,
                                       map_location=device)
@@ -220,10 +216,10 @@ def preprocess_and_save_subgraphs_graphormer(
     has_soft_targets = hasattr(data, 'pair_effect_type_soft') and data.pair_effect_type_soft is not None
     has_smoothed_targets = hasattr(data,
                                    'pair_effect_type_soft_smoothed') and data.pair_effect_type_soft_smoothed is not None
-    if has_soft_targets or has_smoothed_targets:
-        print("Target soft/smoothed data found.")
-    else:
-        print("Target soft/smoothed data NOT found.")
+    # if has_soft_targets or has_smoothed_targets:
+    #     print("Target soft/smoothed data found.")
+    # else:
+    #     print("Target soft/smoothed data NOT found.")
 
     # Main looop
     for i in tqdm(range(num_pairs), desc="Building Subgraphs"):
