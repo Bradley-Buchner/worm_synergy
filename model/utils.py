@@ -2,6 +2,7 @@ import torch.nn.functional as F
 from torchmetrics import AUROC, AveragePrecision
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from scipy import stats
 from scipy.stats import pearsonr
 import random
 import pandas as pd
@@ -9,6 +10,12 @@ import seaborn as sns
 from sklearn.manifold import TSNE
 import umap
 from collections import defaultdict
+import copy
+from functools import partial
+from torch.utils.data import DataLoader
+import networkx as nx
+from torch_geometric.utils import subgraph, degree
+
 
 from model.eval import *
 from model.models import NaiveBaseline, UniformBaseline
@@ -324,8 +331,11 @@ def train_synergy_model(model, train_loader, test_loader, label_name, optimizer,
         train_loss_epoch = train_epoch_trans(model, train_loader, label_name, optimizer, loss_fn, device,
                                              randomize_labels=randomize_labels)
 
-        test_loss_epoch, *_ = eval_epoch_trans_plt(model, test_loader, label_name, loss_fn, device,
-                                                  metrics={}, plot_fig=False)
+        if test_loader is not None:
+            test_loss_epoch, *_ = eval_epoch_trans_plt(model, test_loader, label_name, loss_fn, device,
+                                                      metrics={}, plot_fig=False)
+        else:
+            test_loss_epoch = None
 
         model.history["train_loss"].append(train_loss_epoch)
         model.history["test_loss"].append(test_loss_epoch)
@@ -338,43 +348,54 @@ def train_synergy_model(model, train_loader, test_loader, label_name, optimizer,
 
     print(f"Training complete!")
 
-    metrics_test_soft = {
-        "auc": AUROC(task="multiclass", num_classes=num_classes, average="macro").to(device),
-        "auc_per_class": AUROC(task="multiclass", num_classes=num_classes, average="none").to(device),
-        "auprc": AveragePrecision(task="multiclass", num_classes=num_classes, average="macro").to(device),
-        "auprc_per_class": AveragePrecision(task="multiclass", num_classes=num_classes, average="none").to(device)
-    }
+    if test_loader is not None:
+        metrics_test_soft = {
+            "auc": AUROC(task="multiclass", num_classes=num_classes, average="macro").to(device),
+            "auc_per_class": AUROC(task="multiclass", num_classes=num_classes, average="none").to(device),
+            "auprc": AveragePrecision(task="multiclass", num_classes=num_classes, average="macro").to(device),
+            "auprc_per_class": AveragePrecision(task="multiclass", num_classes=num_classes, average="none").to(device)
+        }
 
-    test_loss_final, test_metrics_final, test_preds_final = eval_epoch_trans_plt(model, test_loader, label_name, loss_fn, device,
-                                                               metrics=metrics_test_soft, plot_fig=False)
-    results = {name: m.detach().cpu().numpy() if isinstance(m, torch.Tensor) else m for name, m in
-               test_metrics_final.items()}
-    results["loss_kl"] = test_loss_final
 
-    model.history["test_metrics"].append(results)
+        test_loss_final, test_metrics_final, test_preds_final = eval_epoch_trans_plt(model, test_loader, label_name, loss_fn, device,
+                                                                   metrics=metrics_test_soft, plot_fig=False)
+        results = {name: m.detach().cpu().numpy() if isinstance(m, torch.Tensor) else m for name, m in
+                   test_metrics_final.items()}
+        results["loss_kl"] = test_loss_final
+
+        model.history["test_metrics"].append(results)
+    else:
+        print("No test set provided, skipping evaluation.")
+        results = None
+        test_preds_final = None
 
     return results, test_preds_final
 
 
-def get_predictions_synergy_model(model, dataloader, label_name, device):
+def get_predictions_synergy_model(model, dataloader, label_name=None, device='cpu'):
     """
     Evaluates the model and returns predictions.
     """
     model.eval()
+    all_pairs = []
     all_preds = []
     all_labels = []
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Eval"):
-            labels = batch.pop(label_name).to(device)
+            if label_name is not None:
+                labels = batch.pop(label_name).to(device)
+            pairs = batch.pop('pair').to(device)
             inputs = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
 
             outputs = model(inputs)
             preds_probs = F.softmax(outputs, dim=1)
 
+            all_pairs.extend(pairs.cpu().numpy())
             all_preds.extend(preds_probs.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
+            if label_name is not None:
+                all_labels.extend(labels.cpu().numpy())
 
-    predictions = {"preds": all_preds, "labels": all_labels}
+    predictions = {"pairs": all_pairs, "preds": all_preds, "labels": all_labels}
 
     return predictions
 
@@ -457,6 +478,152 @@ def get_synergy_model_performance(model_metrics, uninformative_baseline_metrics,
     print(auprc_df_per_class.round(2))
 
 
+def get_loader_inference(data_orig, pair_tuples, preprocessor_fn, preprocessor_fn_configs, dataset_cls,
+                            collate_fn, collate_fn_configs, batch_size=32):
+    """Returns a DataLoader for inference on a list of gene pairs.
+    """
+
+    print(f"\n--- Initializing Inference for {len(pair_tuples)} Pair(s) ---")
+
+    data_inference = copy.copy(data_orig)
+    # u_list, pu_list, v_list, pv_list = zip(*pair_tuples)
+    u_list, v_list = zip(*pair_tuples)
+
+    for u, v in zip(u_list, v_list):
+        if u == v:
+            raise ValueError(f"Identical gene pair detected (ID: {u}). "
+                             f"Synergy inference requires two different genes.")
+
+    pu_list = [1] * len(u_list)
+    pv_list = [0] * len(v_list)
+    pair_pert_tensor = torch.tensor([u_list, pu_list, v_list, pv_list], dtype=torch.long)
+
+    data_inference.pair_pert_group_index = pair_pert_tensor
+    data_inference.pair_index = torch.tensor([u_list, v_list], dtype=torch.long)
+
+    # Nullify targets to ensure no leakage/errors during preprocessing
+    if hasattr(data_inference, 'pair_effect_type_soft'):
+        data_inference.pair_effect_type_soft = None
+    if hasattr(data_inference, 'pair_effect_type_soft_smoothed'):
+        data_inference.pair_effect_type_soft_smoothed = None
+
+    # Run preprocessing
+    subgraph_data = preprocessor_fn(
+        data=data_inference,
+        configs=preprocessor_fn_configs
+    )
+
+    if not subgraph_data:
+        print("Preprocessing returned no samples. Check connectivity/indices.")
+        return {}
+
+    # DataLoader setup
+    dataset = dataset_cls(subgraph_data)
+
+    collate_partial = partial(collate_fn, pad_values=collate_fn_configs)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_partial)
+
+    return loader, subgraph_data
+
+
+def estimate_map(samples):
+    """Estimates the MAP by finding the mode of the sample distribution via KDE."""
+    if np.all(samples == samples[0]):
+        return samples[0]
+    kernel = stats.gaussian_kde(samples)
+    x_range = np.linspace(min(samples), max(samples), 500)
+    kde_values = kernel(x_range)
+    return x_range[np.argmax(kde_values)]
+
+
+def predict_with_mc_dropout(model, dataloader, num_samples=100, device='cpu'):
+    model.to(device)
+    model.eval()
+
+    # Keep Dropout layers active during inference
+    for m in model.modules():
+        if m.__class__.__name__.startswith('Dropout'):
+            m.train()
+
+    all_samples = [] # Stores (num_samples, batch_size, 3)
+
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc="MC Dropout Sampling"):
+            inputs = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
+
+            batch_probs = []
+            for _ in range(num_samples):
+                logits = model(inputs)
+                probs = F.softmax(logits, dim=1) #
+                batch_probs.append(probs.cpu().numpy())
+
+            all_samples.append(np.array(batch_probs))
+
+    # Reshape to (num_samples, total_pairs, 3)
+    all_samples = np.concatenate(all_samples, axis=1)
+
+    total_pairs = all_samples.shape[1]
+    all_results = []
+
+    for i in range(total_pairs):
+        pair_samples = all_samples[:, i, :] # (num_samples, 3)
+        class_stats = []
+
+        for c in range(3):
+            samples_c = pair_samples[:, c]
+            mean = np.mean(samples_c)
+            std = np.std(samples_c)
+            # Compute 95% Confidence Interval using percentiles
+            ci_lower, ci_upper = np.percentile(samples_c, [2.5, 97.5])
+            # Compute MAP Estimate
+            map_estimate = estimate_map(samples_c)
+
+            class_stats.append({
+                'mean': mean,
+                'std': std,
+                'ci_95': (ci_lower, ci_upper),
+                'map': map_estimate,
+                'raw_samples': samples_c
+            })
+
+        all_results.append(class_stats)
+
+    return all_results
+
+
+def plot_uncertainty_densities(pair_results, pair_name="Gene Pair"):
+    """Visualizes the densities of predicted probabilities for a single pair."""
+    classes = ["Antagonistic", "Additive", "Synergistic"]
+    colors = ["#3498db", "#95a5a6", "#e74c3c"] # Blue, Gray, Red
+
+    plt.figure(figsize=(10, 6))
+
+    for i, class_name in enumerate(classes):
+        data = pair_results[i]
+        samples = data['raw_samples']
+
+        # Plot Kernel Density Estimate
+        sns.kdeplot(samples, fill=True, label=f"{class_name}", color=colors[i], alpha=0.3)
+
+        # Draw vertical lines for MAP and CI
+        plt.axvline(data['map'], color=colors[i], linestyle='--', lw=2,
+                    label=f"{class_name} MAP: {data['map']:.3f}")
+
+        print(f"--- {class_name} Interaction Statistics ---")
+        print(f"MAP Estimate: {data['map']:.4f}")
+        print(f"95% CI:       [{data['ci_95'][0]:.4f}, {data['ci_95'][1]:.4f}]")
+        print(f"Mean (μ):     {data['mean']:.4f}\n")
+
+    plt.title(f"Interaction Type Probability Distributions: {pair_name}")
+    plt.xlabel("Predicted Probability")
+    plt.ylabel("Density")
+    plt.xlim(0, 1)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
 def calculate_average_distribution(dataloader, label_name, num_classes, device):
     """
     Calculates the mean label distribution across a dataset.
@@ -533,6 +700,7 @@ def naive_baseline(model, train_loader, test_loader, loss_fn, baseline_type='mea
 
     return test_results
 
+
 def _get_representations(model, dataloader, device):
     """Helper to extract representations and labels from a dataloader."""
     model.eval()
@@ -549,6 +717,7 @@ def _get_representations(model, dataloader, device):
             labels.append(batch['target_soft_smoothed'].cpu().numpy())
 
     return np.concatenate(reps, axis=0), np.concatenate(labels, axis=0)
+
 
 def visualize_synergy_landscape(model, train_loader, test_loader, method='tsne', device='mps'):
     # 1. Extract data
@@ -787,3 +956,252 @@ def analyze_top_attended_nodes(model, loader, id_to_name_map, device, top_k=20, 
     else:
         print("No valid nodes encountered to calculate stats.")
     print("=================================\n")
+
+
+def plot_subgraph_sample(subgraph_data, data_network, id2node_dict):
+
+    if len(subgraph_data) != 1:
+        raise ValueError(f"Expected 1 subgraph, but got {len(subgraph_data)}")
+
+    sample = subgraph_data[0]
+    subset_nodes = sample['node_ids']
+    focal_pair = sample['pair']
+
+    edge_index_sub, _ = subgraph(
+        subset_nodes,
+        data_network.edge_index,
+        relabel_nodes=False
+    )
+
+    G = nx.DiGraph()
+    G.add_nodes_from(subset_nodes.tolist())
+    G.add_edges_from(edge_index_sub.t().tolist())
+
+    node_colors = []
+    for node in G.nodes():
+        if node in focal_pair.tolist():
+            node_colors.append('#ff6b6b')
+        else:
+            node_colors.append('#4ecdc4')
+
+    node_labels = {node: id2node_dict.get(node, node) for node in G.nodes()}
+    plt.figure(figsize=(10, 8))
+    pos = nx.spring_layout(G, seed=42)
+
+    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=800, edgecolors='black')
+    nx.draw_networkx_edges(G, pos, edge_color='gray', alpha=0.5, arrows=True, arrowstyle='-|>', arrowsize=20,
+                           node_size=800)
+    nx.draw_networkx_labels(G, pos, labels=node_labels, font_color='black', font_weight='bold')
+    name_a = id2node_dict[focal_pair[0].item()]
+    name_b = id2node_dict[focal_pair[1].item()]
+
+    focal_pair_label = f"({name_a}, {name_b})"
+    plt.title(f"Subgraph of {focal_pair_label}")
+    plt.axis('off')
+    plt.show()
+
+
+def analyze_subgraph_sample(subgraph_data, id2node_dict):
+
+    if len(subgraph_data) != 1:
+        raise ValueError(f"Expected 1 subgraph, but got {len(subgraph_data)}")
+
+    sample = subgraph_data[0]
+
+    # Extract global IDs and perturbations for the pair
+    u_global, v_global = sample['pair'][0].item(), sample['pair'][1].item()
+    name_u = id2node_dict[u_global]
+    name_v = id2node_dict[v_global]
+    u_perturb, v_perturb = sample['pair_perturbations'][0].item(), sample['pair_perturbations'][1].item()
+
+    # Find local indices in the node_ids tensor
+    node_ids = sample['node_ids']
+    idx_u = (node_ids == u_global).nonzero(as_tuple=True)[0].item()
+    idx_v = (node_ids == v_global).nonzero(as_tuple=True)[0].item()
+
+    # Distances
+    hop_dist = sample['pairwise_dist'][idx_u, idx_v].item()
+    aging_dist_u = sample['lifespan_dist'][idx_u].item()
+    aging_dist_v = sample['lifespan_dist'][idx_v].item()
+
+    print(f"=== Subgraph Summary ({name_u} & {name_v}) ===")
+    print(f"\nHop distance between nodes: {hop_dist}   (1 => nodes interact directly)")
+    print(f"\nAging distance (lifespan_dist) - Gene U: {aging_dist_u}, Gene V: {aging_dist_v}   (0 => is a known lifespan"
+          f" gene, 1 => interacts with a known lifespan gene)")
+
+    # Edge type frequency summary
+    # 0: genetic, 1: regulatory, 2: physical, 3: none
+    adj = sample['adj_matrix']
+
+    # Filter out the '3' (no edge) values
+    edges_only = adj[adj != 3]
+
+    # Count occurrences of 0, 1, and 2
+    counts = torch.bincount(edges_only.flatten(), minlength=3)
+
+    edge_map = {0: "Genetic", 1: "Regulatory", 2: "Physical"}
+    total_edges = edges_only.numel()
+
+    print(f"\n=== Subgraph Edge Summary ===")
+    print(f"Total interactions/edges: {total_edges}")
+    for val, name in edge_map.items():
+        count = counts[val].item()
+        percentage = (count / total_edges * 100) if total_edges > 0 else 0
+        print(f"- {name} (Type {val}): {count} ({percentage:.1f}%)")
+
+
+def single_gene_summary(gene_id, data_original, id2node_dict):
+    """
+    Get network summary statistics for a single gene in the C. elegans interaction network,
+    including full experimental details for tested pairs.
+    """
+    # Mapping for perturbation IDs based on typical project schema:
+    # 0=knockdown, 1=knockout, 2=overexpression
+    pert_map = {0: "kd", 1: "ko", 2: "oe", 3: "pad"}
+
+    gene_name = id2node_dict.get(gene_id, f"Unknown({gene_id})")
+    print(f"=== Summary for Gene: {gene_name} (ID: {gene_id}) ===")
+
+    # Centrality (in-degree, out-degree)
+    out_deg = degree(data_original.edge_index[0], num_nodes=data_original.num_nodes)
+    in_deg = degree(data_original.edge_index[1], num_nodes=data_original.num_nodes)
+    g_in = in_deg[gene_id].item()
+    g_out = out_deg[gene_id].item()
+    print(f"- Centrality: In-Degree = {g_in}, Out-Degree = {g_out}")
+
+    # Interaction type breakdown
+    mask_source = data_original.edge_index[0] == gene_id
+    mask_target = data_original.edge_index[1] == gene_id
+    relevant_edges_mask = mask_source | mask_target
+    gene_edge_types = data_original.edge_type[relevant_edges_mask]
+    total_interactions = gene_edge_types.numel()
+
+    if total_interactions > 0:
+        counts = torch.bincount(gene_edge_types, minlength=3)
+        perc = (counts.float() / total_interactions) * 100
+        print(f"- Interaction Types (Total: {total_interactions}):")
+        print(f"  * Genetic:    {counts[0]} ({perc[0]:.1f}%)")
+        print(f"  * Regulatory: {counts[1]} ({perc[1]:.1f}%)")
+        print(f"  * Physical:   {counts[2]} ({perc[2]:.1f}%)")
+    else:
+        print("- Interaction Types: No interactions found in graph.")
+
+    # Lifespan association
+    is_lifespan = data_original.lifespan_association[gene_id].item()
+    ls_status = "YES" if is_lifespan == 1 else "No"
+    print(f"- Known Lifespan Association: {ls_status}")
+
+    # Neighbors lifespan proportion
+    neighbors_out = data_original.edge_index[1][mask_source]
+    neighbors_in = data_original.edge_index[0][mask_target]
+    all_neighbors = torch.unique(torch.cat([neighbors_out, neighbors_in]))
+
+    if all_neighbors.numel() > 0:
+        neighbor_ls_flags = data_original.lifespan_association[all_neighbors]
+        prop_ls_neighbors = (neighbor_ls_flags.sum().float() / all_neighbors.numel()) * 100
+        # print(f"- Neighbors: {all_neighbors.numel()} unique neighbors, {prop_ls_neighbors:.1f}% are lifespan genes")
+        print(f"- Neighbors: {all_neighbors.numel()} unique neighbors, {neighbor_ls_flags.sum()} are lifespan genes")
+
+    else:
+        print("- Neighbors: No neighbors found.")
+
+    # Experimental data availability
+    exp_mask = (data_original.pair_pert_group_index[0] == gene_id) | \
+               (data_original.pair_pert_group_index[2] == gene_id)
+
+    in_experimental = exp_mask.any().item()
+    print(f"- Appears in Experimental Data: {'Yes' if in_experimental else 'No'}")
+
+    # Experimental data breakdown
+    if in_experimental:
+        indices = torch.where(exp_mask)[0]
+        avg_dist = data_original.pair_effect_type_soft_smoothed[exp_mask].mean(dim=0)
+
+        print(f"- Experimental Details:")
+        print(f"  * Involved in {len(indices)} unique tested pairs")
+        print(f"  * Avg. Interaction Distribution [Antag / Neither / Synerg]:")
+        print(f"    [{avg_dist[0]:.3f} / {avg_dist[1]:.3f} / {avg_dist[2]:.3f}]")
+
+        print(f"\n  * Full Experiment List (w/ smoothed interaction type frequencies):")
+        print(f"    {'Mutant':<40} | {'Distribution [A/N/S]':<20}")
+        print(f"    {'-' * 65}")
+
+        for idx in indices:
+            u_id = data_original.pair_pert_group_index[0, idx].item()
+            u_pert = data_original.pair_pert_group_index[1, idx].item()
+            v_id = data_original.pair_pert_group_index[2, idx].item()
+            v_pert = data_original.pair_pert_group_index[3, idx].item()
+
+            u_name = id2node_dict.get(u_id, f"ID:{u_id}")
+            v_name = id2node_dict.get(v_id, f"ID:{v_id}")
+            u_p_name = pert_map.get(u_pert, str(u_pert))
+            v_p_name = pert_map.get(v_pert, str(v_pert))
+
+            exp_str = f"{u_name}({u_p_name}) + {v_name}({v_p_name})"
+
+            dist = data_original.pair_effect_type_soft_smoothed[idx].tolist()
+            print(f"    {exp_str:<40} | [{dist[0]:.3f}, {dist[1]:.3f}, {dist[2]:.3f}]")
+
+    print("=" * 70)
+
+
+def single_gene_predictions(predictions, id2node_dict, gene_id, top_n=10):
+    """
+    Summarizes model predictions for a specific gene across all evaluated pairs.
+    Outputs a table of top synergistic double mutants in the style of single_gene_summary.
+    """
+    pairs = predictions['pairs']
+    preds = np.array(predictions['preds'])
+    gene_name = id2node_dict.get(gene_id, f"ID:{gene_id}")
+
+    # 1. Filter for the target gene
+    mask = [(gene_id in p) for p in pairs]
+    filtered_pairs = [p for i, p in enumerate(pairs) if mask[i]]
+    filtered_preds = preds[mask]
+
+    if len(filtered_preds) == 0:
+        print(f"No predictions found for gene {gene_name} (ID: {gene_id}).")
+        return None
+
+    # 2. Extract partner IDs
+    partners = [p[0] if p[1] == gene_id else p[1] for p in filtered_pairs]
+    avg_dist = np.mean(filtered_preds, axis=0)
+
+    # 3. Sort by Synergy Likelihood (Index 2)
+    ranked_indices = np.argsort(filtered_preds[:, 2])[::-1]
+
+    # 4. Print formatted output
+    print(f"=== Model Predictions for Gene: {gene_name} (ID: {gene_id}) ===")
+    print(f"- Evaluation Details:")
+    print(f"  * Total Pairs Evaluated: {len(filtered_preds)}")
+    print(f"  * Avg. Predicted Distribution [Antag / Addit / Synerg]:")
+    print(f"    [{avg_dist[0]:.3f} / {avg_dist[1]:.3f} / {avg_dist[2]:.3f}]")
+
+    print(f"\n  * Top {top_n} most synergistic double mutants:")
+    print(f"    {'Mutant':<45} | {'Synergistic Prob.':<20}")
+    print(f"    {'-' * 70}")
+
+    ranking_list = []
+
+    for i in ranked_indices[:top_n]:
+        p_id = partners[i]
+        partner_name = id2node_dict.get(p_id, f"ID:{p_id}")
+        synergy_prob = filtered_preds[i, 2]
+
+        # Format the mutant column as requested
+        mutant_str = f"{gene_name}(kd) + {partner_name}(ko)"
+
+        # Print formatted row
+        print(f"    {mutant_str:<45} | {synergy_prob:.3f}")
+
+        ranking_list.append({
+            'mutant': mutant_str,
+            'synergistic_prob': synergy_prob
+        })
+
+    print("=" * 75)
+
+    # return {
+    #     "avg_dist": avg_dist,
+    #     "ranking": pd.DataFrame(ranking_list)
+    # }
