@@ -85,9 +85,9 @@ class RelationalGTEncoderLayer(nn.Module):
 
 
 # Relational graph transformer for gene pair classification
-class RelationalPairClassifierGraphormer(nn.Module):
+class SynergyGT(nn.Module):
     """
-    Graphormer architecture modified to use RelationalGTEncoderLayers,
+    Graph transformer architecture modified to use RelationalGTEncoderLayers,
     which learn unique transformations for each edge type.
     """
     def __init__(self,
@@ -110,7 +110,7 @@ class RelationalPairClassifierGraphormer(nn.Module):
         self.pretrained_gene_embs_tensor = params.get('pretrained_gene_embs_tensor', None)
         self.max_spd = params.get('max_spd', 6)
         self.structural_max_dist = params.get('max_spd', 6)
-        self.num_degree_bins = params.get('num_degree_bins', 4)
+        self.num_degree_bins = params.get('num_degree_bins', 5)
         # self.num_ont_bins = 0
 
         self.history = {
@@ -131,11 +131,11 @@ class RelationalPairClassifierGraphormer(nn.Module):
             self.pretrained_node_embedding.weight.data[self.num_nodes].zero_()
             self.pretrained_node_embedding.weight.requires_grad = self.fine_tune_gene_emb  # set True if you want fine-tuning
 
-        self.dist_uv_embedding = nn.Embedding(self.structural_max_dist + 1, self.d_model)
-        self.in_degree_embedding = nn.Embedding(self.num_degree_bins, self.d_model)
-        self.out_degree_embedding = nn.Embedding(self.num_degree_bins, self.d_model)
-        self.lifespan_dist_embedding = nn.Embedding(self.max_lifespan_dist + 1, self.d_model,
-                                                    padding_idx=self.max_lifespan_dist)
+        self.dist_uv_embedding = nn.Embedding(self.structural_max_dist + 2, self.d_model)
+        self.in_degree_embedding = nn.Embedding(self.num_degree_bins + 1, self.d_model)
+        self.out_degree_embedding = nn.Embedding(self.num_degree_bins + 1, self.d_model)
+        self.lifespan_dist_embedding = nn.Embedding(self.max_lifespan_dist + 2, self.d_model,
+                                                    padding_idx=self.max_lifespan_dist + 1)
         # self.mutual_interactor_emb = nn.Embedding(2, self.d_model)
 
         # --- Initialize perturbation type embedding ---
@@ -147,10 +147,10 @@ class RelationalPairClassifierGraphormer(nn.Module):
         self.base_pair_token = nn.Parameter(torch.randn(1, 1, self.d_model))
 
         # --- Initialize embeddings for biasing attention ---
-        self.pairwise_dist_embedding = nn.Embedding(self.max_spd + 1, self.nhead, padding_idx=self.max_spd)
+        self.pairwise_dist_embedding = nn.Embedding(self.max_spd + 2, self.nhead, padding_idx=self.max_spd + 1)
         self.edge_type_embedding = nn.Embedding(self.num_edge_types + 1, self.nhead, padding_idx=self.num_edge_types)
         self.mutual_interactor_bias_emb = nn.Embedding(2, self.nhead)
-        self.dist_uv_bias_embedding = nn.Embedding(self.structural_max_dist + 1, self.nhead)
+        self.dist_uv_bias_embedding = nn.Embedding(self.structural_max_dist + 2, self.nhead)
         # self.lifespan_bias_emb = nn.Embedding(2, self.nhead)
 
         # --- Initialize a nn.Linear projection for each unique edge type in the graph ---
