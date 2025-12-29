@@ -24,6 +24,76 @@ class PairSubgraphDataset(torch.utils.data.Dataset):
         return self.samples[idx]
 
 
+def compute_path_sum_matrix(data, output_dir):
+    """
+    Computes and saves all core attributes required for the graph transformer in one pass.
+
+    This function now calculates:
+    1. avg_path_sum_matrix_old.pt: The sum of edge types averaged over all shortest paths.
+    """
+    print("--- Starting Graph Transformer Attribute Pre-computation ---")
+
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"Created output directory: {output_dir}")
+
+    N = data.num_nodes
+    edge_index = data.edge_index
+    edge_type = data.edge_type
+
+    # Compute all-pairs average path sums
+    print("\nCalculating All-Pairs Average Shortest Path Sums...")
+
+    adj = [[] for _ in range(N)]
+    edge_type_map = {}
+    edge_index_cpu = edge_index.cpu()
+    edge_type_cpu = edge_type.cpu()
+
+    for i in range(edge_index_cpu.shape[1]):
+        u, v = edge_index_cpu[0, i].item(), edge_index_cpu[1, i].item()
+        t = edge_type_cpu[i].item()
+        adj[u].append(v)
+        edge_type_map[(u, v)] = t
+
+    all_pairs_avg_sum_matrix = torch.zeros((N, N), dtype=torch.float32)
+
+    for source_node in tqdm(range(N), desc="Running Augmented BFS for Avg Sums"):
+
+        distances = torch.full((N,), -1, dtype=torch.long)
+        path_counts = torch.zeros((N,), dtype=torch.long)
+        total_sums = torch.zeros((N,), dtype=torch.long)
+
+        q = deque([source_node])
+
+        distances[source_node] = 0
+        path_counts[source_node] = 1
+
+        while q:
+            u = q.popleft()
+
+            for v in adj[u]:
+                edge_type_val = edge_type_map.get((u, v), 0)
+
+                if distances[v] == -1:
+                    distances[v] = distances[u] + 1
+                    path_counts[v] = path_counts[u]
+                    total_sums[v] = total_sums[u] + (path_counts[u] * edge_type_val)
+                    q.append(v)
+
+                elif distances[v] == distances[u] + 1:
+                    path_counts[v] += path_counts[u]
+                    total_sums[v] += total_sums[u] + (path_counts[u] * edge_type_val)
+
+        average_sums = total_sums.float() / path_counts.float().clamp(min=1)
+
+        all_pairs_avg_sum_matrix[source_node] = average_sums
+
+    torch.save(all_pairs_avg_sum_matrix, os.path.join(output_dir, 'avg_path_sum_matrix.pt'))
+    print("All-pairs average path sum matrix saved.")
+
+    print("\n--- All pre-computations finished successfully! ---")
+
+
 def compute_gt_attributes(data, is_directed, output_dir):
     """
     Computes and saves all core attributes required for the graph transformer in one pass.
@@ -154,7 +224,7 @@ def bin_logarithmically(degrees, max_val, num_bins=4):
     return binned_degrees
 
 
-def preprocess_and_save_subgraphs_graphormer(data, configs, degree_epsilon=1.0):
+def generate_subgraph_samples(data, configs, degree_epsilon=1.0):
     """
     Generates subgraphs comprising the combined one-hop neighborhood of paired genes
 
