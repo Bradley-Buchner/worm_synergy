@@ -76,7 +76,3 @@ The model is trained to minimize the Kullback–Leibler (KL) divergence between 
 
 ### Output
 For any pair of gene perturbations, the model outputs predicted relative frequencies for antagonistic, additive, and synergistic lifespan effects. These predictions can be interpreted as a probability distribution over expected genetic interaction effects, and can be used to prioritize candidate gene pairs for experimental validation.
-Link to model Demo: []
-
-Link to exploratory tool/notebook: []
-
