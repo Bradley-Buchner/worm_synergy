@@ -1,9 +1,10 @@
 import torch.nn.functional as F
 from torchmetrics import AUROC, AveragePrecision
-from tqdm import tqdm
+# from tqdm import tqdm
+from tqdm.notebook import tqdm
 import matplotlib.pyplot as plt
 from scipy import stats
-from scipy.stats import pearsonr
+from scipy.stats import pearsonr, norm
 import random
 import pandas as pd
 import seaborn as sns
@@ -15,6 +16,7 @@ from functools import partial
 from torch.utils.data import DataLoader
 import networkx as nx
 from torch_geometric.utils import subgraph, degree
+from itertools import combinations, product, chain
 
 
 from model.eval import *
@@ -23,9 +25,25 @@ from model.models import NaiveBaseline, UniformBaseline
 
 def train_test_split_simple(processed_data, train_frac=0.8, seed=23):
     """
-    Splits data into train/test sets by shuffling.
-    This method assumes each item in processed_data corresponds to a unique pair.
+    Splits a list of processed data into training and testing subsets using a random shuffle.
+
+    Params:
+    ------
+    processed_data : list
+        A list of data objects (e.g., PyG Data objects) where each item represents a unique gene pair.
+    train_frac : float, optional
+        The fraction of data to include in the training set (default is 0.8).
+    seed : int, optional
+        Random seed for reproducibility (default is 23).
+
+    Returns:
+    --------
+    train_data : list
+        The subset of data for model training.
+    test_data : list
+        The subset of data for model evaluation.
     """
+
     random.seed(seed)
     torch.manual_seed(seed)
 
@@ -40,6 +58,32 @@ def train_test_split_simple(processed_data, train_frac=0.8, seed=23):
 
 
 def train_epoch_trans(model, dataloader, label_name, optimizer, criterion, device, randomize_labels=False):
+    """
+    Evaluates the model on a validation or test set using Label Distribution Learning (LDL) metrics.
+
+    Params:
+    ------
+    model : torch.nn.Module
+        The SynergyGT model to evaluate.
+    dataloader : torch.utils.data.DataLoader
+        The evaluation data loader.
+    label_name : str
+        The key in the batch dictionary corresponding to the target labels.
+    criterion : callable
+        The loss function used for evaluation.
+    device : torch.device or str
+        The device to run evaluation on.
+    metrics : dict, optional
+        A dictionary of torchmetrics (e.g., AUROC) to update during the epoch.
+
+    Returns:
+    -------
+    epoch_loss : float
+        The average loss over the evaluation set.
+    results : dict
+        A dictionary containing calculated metrics including Log-Loss, Cosine Similarity,
+        NDCG, and per-class agreement scores.
+    """
     model.train()
     running_loss = 0.0
     total_samples = 0
@@ -73,8 +117,33 @@ def train_epoch_trans(model, dataloader, label_name, optimizer, criterion, devic
 
 def eval_epoch_trans(model, dataloader, label_name, criterion, device, metrics={}):
     """
-    Evaluates the model and calculates metrics, including macro-average
-    and per-class AUC scores.
+    Evaluates the model and optionally generates a scatterplot of predicted vs. actual synergy.
+
+    Params:
+    ------
+    model : torch.nn.Module
+        The model to evaluate.
+    dataloader : torch.utils.data.DataLoader
+        The evaluation data loader.
+    label_name : str
+        The target label key.
+    criterion : callable
+        The evaluation loss function.
+    device : torch.device or str
+        The computing device.
+    metrics : dict, optional
+        Torchmetrics to calculate.
+    plot_fig : bool, optional
+        If True, generates and displays a scatterplot of synergy probabilities (default is False).
+
+    Returns:
+    -------
+    epoch_loss : float
+        The average evaluation loss.
+    results : dict
+        Dictionary of calculated performance metrics.
+    predictions : dict
+        Dictionary containing 'preds' and 'labels' for the entire dataset.
     """
     model.eval()
     running_loss = 0.0
@@ -175,9 +244,33 @@ def eval_epoch_trans(model, dataloader, label_name, criterion, device, metrics={
 
 def eval_epoch_trans_plt(model, dataloader, label_name, criterion, device, metrics={}, plot_fig=False):
     """
-    Evaluates the model and calculates metrics, including macro-average
-    and per-class AUC scores. If plot_fig=True, generates a scatterplot of
-    Predicted vs Actual Synergy Probabilities.
+    Evaluates the model and optionally generates a scatterplot of predicted vs. actual synergy.
+
+    Params:
+    ------
+    model : torch.nn.Module
+        The model to evaluate.
+    dataloader : torch.utils.data.DataLoader
+        The evaluation data loader.
+    label_name : str
+        The target label key.
+    criterion : callable
+        The evaluation loss function.
+    device : torch.device or str
+        The computing device.
+    metrics : dict, optional
+        Torchmetrics to calculate.
+    plot_fig : bool, optional
+        If True, generates and displays a scatterplot of synergy probabilities (default is False).
+
+    Returns:
+    -------
+    epoch_loss : float
+        The average evaluation loss.
+    results : dict
+        Dictionary of calculated performance metrics.
+    predictions : dict
+        Dictionary containing 'preds' and 'labels' for the entire dataset.
     """
     model.eval()
     running_loss = 0.0
@@ -321,6 +414,43 @@ def eval_epoch_trans_plt(model, dataloader, label_name, criterion, device, metri
 
 def train_synergy_model(model, train_loader, test_loader, label_name, optimizer, scheduler, loss_fn, randomize_labels,
                 device, num_epochs=10, num_classes=3, seed=23):
+    """
+    High-level wrapper to train the SynergyGT model and evaluate it on a test set.
+
+    Params:
+    ------
+    model : torch.nn.Module
+        The model instance to train.
+    train_loader : torch.utils.data.DataLoader
+        The training data.
+    test_loader : torch.utils.data.DataLoader or None
+        The test data for evaluation. If None, evaluation is skipped.
+    label_name : str
+        The target label key.
+    optimizer : torch.optim.Optimizer
+        The optimizer.
+    scheduler : torch.optim.lr_scheduler or None
+        The learning rate scheduler.
+    loss_fn : callable
+        The loss function.
+    randomize_labels : bool
+        Whether to shuffle labels for baseline testing.
+    device : torch.device or str
+        The computing device.
+    num_epochs : int, optional
+        Number of training epochs (default is 10).
+    num_classes : int, optional
+        Number of interaction classes (default is 3).
+    seed : int, optional
+        Random seed for reproducibility.
+
+    Returns:
+    -------
+    results : dict or None
+        The final test metrics.
+    test_preds_final : dict or None
+        The final predictions on the test set.
+    """
 
     random.seed(seed)
     np.random.seed(seed)
@@ -374,7 +504,23 @@ def train_synergy_model(model, train_loader, test_loader, label_name, optimizer,
 
 def get_predictions_synergy_model(model, dataloader, label_name=None, device='cpu'):
     """
-    Evaluates the model and returns predictions.
+    Runs model inference on a dataloader to generate predictions for gene pairs.
+
+    Params:
+    -------
+    model : torch.nn.Module
+        The trained SynergyGT model.
+    dataloader : torch.utils.data.DataLoader
+        The data to perform inference on.
+    label_name : str, optional
+        If provided, extracts and returns the true labels alongside predictions.
+    device : torch.device or str, optional
+        The computing device (default is 'cpu').
+
+    Returns
+    -------
+    predictions : dict
+        A dictionary containing 'pairs', 'preds', and optionally 'labels'.
     """
     model.eval()
     all_pairs = []
@@ -400,9 +546,125 @@ def get_predictions_synergy_model(model, dataloader, label_name=None, device='cp
     return predictions
 
 
-def get_synergy_model_performance(model_metrics, uninformative_baseline_metrics, mean_baseline_metrics):
-    import pandas as pd
+def enable_dropout(model):
+    """
+    Forces Dropout and BatchNorm layers into training mode to enable stochastic inference.
 
+    Params:
+    -------
+    model : torch.nn.Module
+        The model to modify.
+    """
+    for m in model.modules():
+        if m.__class__.__name__.startswith('Dropout') or \
+                m.__class__.__name__.startswith('BatchNorm'):
+            m.train()
+
+
+def predict_with_mc_dropout(model, dataloader, num_samples=100, device='cpu'):
+    """
+    Performs Monte Carlo Dropout inference to estimate prediction uncertainty.
+
+    Params:
+    -------
+    model : torch.nn.Module
+        The SynergyGT model.
+    dataloader : torch.utils.data.DataLoader
+        The dataloader containing gene pairs for inference.
+    num_samples : int, optional
+        The number of stochastic forward passes to perform (default is 100).
+    device : torch.device or str, optional
+        The computing device (default is 'cpu').
+
+    Returns:
+    -------
+    all_results : list
+        A list of dictionaries containing mean, std, 95% CI, and MAP estimates for each pair.
+    stacked_preds : torch.Tensor
+        A tensor of shape (num_samples, total_pairs, num_classes) containing all raw samples.
+    """
+    # Move model to device and set to eval
+    model.to(device)
+    model.eval()
+
+    # Keep Dropout layers active during inference
+    for m in model.modules():
+        if m.__class__.__name__.startswith('Dropout'):
+            m.train()
+
+    # List to store full-dataset predictions for each stochastic pass
+    all_sample_tensors = []
+
+    # We iterate by sample first to make stacking easy (like get_mc_dropout_predictions)
+    for _ in tqdm(range(num_samples), desc="MC Dropout Sampling"):
+        batch_probs = []
+        with torch.no_grad():
+            for batch in dataloader:
+                # SynergyGT inputs usually come in a dict or batch object
+                inputs = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
+
+                logits = model(inputs)
+                probs = F.softmax(logits, dim=1)
+                batch_probs.append(probs.cpu())
+
+        # Concatenate all batches for this specific MC pass
+        # Resulting shape: (total_pairs, 3)
+        all_sample_tensors.append(torch.cat(batch_probs, dim=0))
+
+    # Stack into a single tensor: (num_samples, total_pairs, 3)
+    stacked_preds = torch.stack(all_sample_tensors, dim=0)
+
+    # For statistical processing, convert to numpy once
+    all_preds_np = stacked_preds.numpy()
+    total_pairs = all_preds_np.shape[1]
+    all_results = []
+
+    # Calculate statistics for each pair
+    for i in range(total_pairs):
+        pair_samples = all_preds_np[:, i, :]  # (num_samples, 3)
+        class_stats = []
+
+        for c in range(3):
+            samples_c = pair_samples[:, c]
+
+            # Descriptive stats
+            mean = np.mean(samples_c)
+            std = np.std(samples_c)
+            ci_lower, ci_upper = np.percentile(samples_c, [2.5, 97.5])
+
+            # Using your existing MAP estimation utility
+            map_estimate = estimate_map(samples_c)
+
+            class_stats.append({
+                'mean': mean,
+                'std': std,
+                'ci_95': (ci_lower, ci_upper),
+                'map': map_estimate,
+                'raw_samples': samples_c
+            })
+
+        all_results.append(class_stats)
+
+    return all_results, stacked_preds
+
+
+def get_synergy_model_performance(model_metrics, uninformative_baseline_metrics, mean_baseline_metrics):
+    """
+    Prints a formatted comparison of the SynergyGT model against uninformative and mean baselines.
+
+    Params:
+    ------
+    model_metrics : dict
+        Performance metrics for the trained SynergyGT model.
+    uninformative_baseline_metrics : dict
+        Metrics for a model predicting a uniform distribution.
+    mean_baseline_metrics : dict
+        Metrics for a model predicting the average training distribution.
+
+    Returns:
+    -------
+    None
+    """
     overall_data = {
         "Model": ["Synergy GT", "Uninformative Baseline", "Mean Baseline"],
         "AUROC (macro)": [
@@ -480,7 +742,34 @@ def get_synergy_model_performance(model_metrics, uninformative_baseline_metrics,
 
 def get_loader_inference(data_orig, pair_tuples, preprocessor_fn, preprocessor_fn_configs, dataset_cls,
                             collate_fn, collate_fn_configs, batch_size=32):
-    """Returns a DataLoader for inference on a list of gene pairs.
+    """
+    Initializes a DataLoader for inference on a custom list of gene pairs.
+
+    Params:
+    -------
+    data_orig : torch_geometric.data.Data
+        The original graph data object.
+    pair_tuples : list of tuples
+        List of (gene_A, gene_B) IDs to evaluate.
+    preprocessor_fn : callable
+        Function to extract subgraphs or features for the model.
+    preprocessor_fn_configs : dict
+        Configuration parameters for the preprocessor.
+    dataset_cls : type
+        The PyTorch Dataset class to use.
+    collate_fn : callable
+        The function to collate samples into batches.
+    collate_fn_configs : dict
+        Padding and configuration for the collate function.
+    batch_size : int, optional
+        The batch size for inference (default is 32).
+
+    Returns
+    -------
+    loader : torch.utils.data.DataLoader
+        The prepared data loader.
+    subgraph_data : list
+        The list of preprocessed subgraph objects.
     """
 
     print(f"\n--- Initializing Inference for {len(pair_tuples)} Pair(s) ---")
@@ -526,8 +815,452 @@ def get_loader_inference(data_orig, pair_tuples, preprocessor_fn, preprocessor_f
     return loader, subgraph_data
 
 
+def get_unknown_gene_pairs(data, sampling_pool_node_ids, N_pool_pairs=None, pool_strategy='all',
+                             min_mutual_interactors=0):
+    """
+    Samples gene pairs from the unlabeled pool based on a specific biological strategy.
+
+    Params:
+    -------
+    data : torch_geometric.data.Data
+        The data object containing known training pairs.
+    sampling_pool_node_ids : list
+        The list of node IDs available for sampling.
+    N_pool_pairs : int, optional
+        The total number of pairs to return. If None, returns all valid pairs.
+    pool_strategy : {'all', 'one_aging', 'both_aging'}, optional
+        The strategy for selecting genes (default is 'all').
+    min_mutual_interactors : int, optional
+        The minimum number of shared neighbors required for a pair to be included.
+
+    Returns:
+    -------
+    unlabeled_pairs : list of tuples
+        A list of (gene_A, gene_B) tuples not present in the training set.
+    """
+    # Extract known gene pairs to avoid duplicates from training
+    known_pairs = set()
+    for gA, _, gB, _ in data.pair_pert_group_index.T.cpu().tolist():
+        known_pairs.add(tuple(sorted((gA, gB))))
+
+    # Identify lifespan-associated genes globally
+    lifespan_set = set()
+    if pool_strategy in ['one_aging', 'both_aging']:
+        lifespan_indices = data.lifespan_association.cpu().nonzero(as_tuple=True)[0]
+        lifespan_set = set(data.node_index[lifespan_indices].cpu().tolist())
+
+    # Generate the full iterator based on strategy using all available nodes
+    if pool_strategy == 'all':
+        pair_iterator = combinations(sampling_pool_node_ids, 2)
+
+    elif pool_strategy == 'one_aging':
+        all_lifespan = [n for n in sampling_pool_node_ids if n in lifespan_set]
+        all_non_lifespan = [n for n in sampling_pool_node_ids if n not in lifespan_set]
+        # Chain the two valid aging-related pair types
+        pair_iterator = chain(product(all_lifespan, all_non_lifespan),
+                              combinations(all_lifespan, 2))
+
+    elif pool_strategy == 'both_aging':
+        all_lifespan = [n for n in sampling_pool_node_ids if n in lifespan_set]
+        pair_iterator = combinations(all_lifespan, 2)
+
+    # Build adjacency only if needed for filtering
+    graph_adj = {}
+    if min_mutual_interactors > 0:
+        edges = data.edge_index.cpu().numpy()
+        for u, v in zip(edges[0], edges[1]):
+            graph_adj.setdefault(u, set()).add(v)
+            graph_adj.setdefault(v, set()).add(u)
+
+    unlabeled_pairs = []
+    for gA, gB in pair_iterator:
+        if gA == gB: continue
+        pair = tuple(sorted((gA, gB)))
+
+        # Skip if already known
+        if pair in known_pairs:
+            continue
+
+        # Filter by mutual interactors
+        if min_mutual_interactors > 0:
+            neigh_A = graph_adj.get(gA, set())
+            neigh_B = graph_adj.get(gB, set())
+            if len(neigh_A.intersection(neigh_B)) < min_mutual_interactors:
+                continue
+
+        unlabeled_pairs.append(pair)
+
+    # Randomly shuffle the final valid list and truncate to N_pool_pairs
+    random.shuffle(unlabeled_pairs)
+    if N_pool_pairs is not None:
+        unlabeled_pairs = unlabeled_pairs[:N_pool_pairs]
+
+    return unlabeled_pairs
+
+
+# --- Acquisition Functions (AL & BO) ---
+
+def select_batch_active_learning(acq_stats, pool_tuples, id2node_dict, query_size=10,
+                                 metric='bald_score'):
+    """
+    Selects the batch that is most *informative* for improving the model.
+    Uses high-uncertainty (BALD) or high-entropy sampling.
+
+    Params:
+    ------
+    acq_stats : dict
+        Dictionary of scores calculated from MC dropout samples.
+    pool_tuples : list of tuples
+        The list of (gene_A, gene_B) pairs in the acquisition pool.
+    id2node_dict : dict
+        Mapping from gene IDs to names.
+    query_size : int, optional
+        Number of items to select (default is 10).
+    metric : {'bald_score', 'predictive_entropy'}, optional
+        The metric used for ranking (default is 'bald_score').
+
+    Returns:
+    -------
+    selected_batch : list of tuples
+        The batch of gene pairs selected for labeling.
+    """
+    print(f"Selecting batch via Active Learning (Metric: {metric})...")
+
+    scores = acq_stats[metric]
+
+    # Handle case where pool is smaller than query size
+    if len(scores) == 0:
+        return []
+    if len(scores) < query_size:
+        print(
+            f"  Warning: Pool size ({len(scores)}) is less than query size ({query_size}). "
+            f"Returning all {len(scores)} items.")
+        query_size = len(scores)
+
+    # Get indices of the top N scores (descending order)
+    top_n_indices = np.argsort(scores)[-query_size:][::-1]
+
+    # Print detailed ranked list
+    print(f"\n--- Top {query_size} AL Candidates (Metric: {metric}) ---")
+    print(f"{'Rank':<4} | {metric:<10} | {'Mutant':<45}")
+    print("-" * 70)
+
+    for i, idx in enumerate(top_n_indices):
+        # Extract gene IDs from the pool tuple (assuming (gA, gB) format)
+        gA_id, gB_id = pool_tuples[idx]
+
+        # Look up names in the dictionary
+        gene_name = id2node_dict.get(gA_id, f"ID:{gA_id}")
+        partner_name = id2node_dict.get(gB_id, f"ID:{gB_id}")
+
+        # Create the specific string format requested
+        mutant_str = f"{gene_name}(kd) + {partner_name}(ko)"
+
+        # Print formatted row matching the single_gene_predictions style
+        print(f"{i + 1:<4} | {scores[idx]:<10.5f} | {mutant_str}")
+
+    # Select the corresponding tuples for the model return
+    selected_batch = [pool_tuples[i] for i in top_n_indices]
+
+    return selected_batch
+
+
+def select_batch_bayesian_optimization(acq_stats, pool_tuples,
+                                       id2node_dict,
+                                       best_so_far_value,
+                                       query_size=10,
+                                       strategy='ucb',
+                                       kappa=1.96):
+    """
+    Selects gene pairs to maximize discovery of "hits" (e.g., synergistic interactions).
+    Balances exploration (uncertainty) and exploitation (high mean).
+
+    Params:
+    ------
+    acq_stats : dict
+        Acquisition statistics containing mean and standard deviation.
+    pool_tuples : list of tuples
+        The list of (gene_A, gene_B) pairs in the acquisition pool.
+    id2node_dict : dict
+        Mapping from gene IDs to names.
+    best_so_far_value : float
+        The maximum target probability observed in the training data.
+    query_size : int, optional
+        Number of items to select (default is 10).
+    strategy : {'ucb', 'ei'}, optional
+        Bayesian optimization strategy (default is 'ucb').
+    kappa : float, optional
+        Exploration parameter for UCB (default is 1.96).
+
+    Returns:
+    -------
+    selected_batch : list of tuples
+        The batch of gene pairs selected for labeling.
+    """
+
+    print(f"Selecting batch via Bayesian Optimization (Strategy: {strategy})...")
+
+    mean = acq_stats["mean_target_prob"]
+    std_dev = acq_stats["std_dev_target_prob"]
+
+    if len(mean) == 0:
+        return []
+
+    scores = None
+    Z = None
+
+    if strategy.lower() == 'ucb':
+        # Score = mean + kappa * std_dev
+        scores = mean + kappa * std_dev
+
+    elif strategy.lower() == 'ei':
+        epsilon = 1e-9
+        # Z-score of the improvement
+        Z = (mean - best_so_far_value - epsilon) / (std_dev + epsilon)
+        # Expected Improvement calculation
+        scores = (mean - best_so_far_value - epsilon) * norm.cdf(Z) + \
+                 std_dev * norm.pdf(Z)
+        scores[std_dev == 0] = 0.0
+    else:
+        raise ValueError("Unknown BO strategy. Use 'ucb' or 'ei'.")
+
+    if len(scores) < query_size:
+        print(f"  Warning: Pool size ({len(scores)}) less than query size. Returning all items.")
+        query_size = len(scores)
+
+    if query_size == 0:
+        return []
+
+    top_n_indices = np.argsort(scores)[-query_size:][::-1]
+
+    print(f"\n--- Top {query_size} BO Candidates (Strategy: {strategy}) ---")
+
+    # Shared logic for mutant string formatting
+    def get_mutant_str(idx):
+        gA_id, gB_id = pool_tuples[idx]
+        name_A = id2node_dict.get(gA_id, f"ID:{gA_id}")
+        name_B = id2node_dict.get(gB_id, f"ID:{gB_id}")
+        return f"{name_A}(kd) + {name_B}(ko)"
+
+    if strategy.lower() == 'ucb':
+        print(f"{'Rank':<4} | {'UCB Score':<10} | {'Mean Prob':<10} | {'Std Dev':<10} | {'Mutant':<45}")
+        print("-" * 85)
+        for i, idx in enumerate(top_n_indices):
+            mutant_str = get_mutant_str(idx)
+            print(f"{i + 1:<4} | {scores[idx]:<10.5f} | {mean[idx]:<10.5f} | {std_dev[idx]:<10.5f} | {mutant_str}")
+
+    elif strategy.lower() == 'ei':
+        print(f"{'Rank':<4} | {'EI Score':<10} | {'Mean Prob':<10} | {'Std Dev':<10} | {'Z-Score':<10} | {'Mutant':<45}")
+        print("-" * 95)
+        for i, idx in enumerate(top_n_indices):
+            mutant_str = get_mutant_str(idx)
+            print(f"{i + 1:<4} | {scores[idx]:<10.5f} | {mean[idx]:<10.5f} | {std_dev[idx]:<10.5f} | {Z[idx]:<10.5f} | {mutant_str}")
+
+    selected_batch = [pool_tuples[i] for i in top_n_indices]
+
+    return selected_batch
+
+# ----------------------------------------
+
+def calculate_acquisition_stats(mc_predictions, target_class=2):
+    """
+    Calculates information-theoretic metrics from MC Dropout predictions for active learning.
+
+    Params:
+    -------
+    mc_predictions : torch.Tensor
+        The raw predictions tensor of shape (num_samples, n_pairs, n_classes).
+    target_class : int, optional
+        The index of the class to focus on for Bayesian Optimization (default is 2, synergy).
+
+    Returns:
+    -------
+    stats : dict
+        Dictionary containing BALD scores, predictive entropy, mean target probability,
+        and standard deviation.
+    """
+    # Mean & Variance across all classes
+    #    Shapes: [n_pairs, n_classes]
+    mean_probs = mc_predictions.mean(dim=0).numpy()
+    pred_variance = mc_predictions.var(dim=0).numpy()
+
+    # Extract stats for the specific target "discovery" class
+    #    Shapes: [n_pairs]
+    mean_target_prob = mean_probs[:, target_class]
+    variance_target_prob = pred_variance[:, target_class]
+
+    # Active Learning (Informativeness) Metrics
+
+    # BALD (Bayesian Active Learning by Disagreement)
+    # Mutual Information = Total_Entropy - Expected_Data_Entropy
+
+    # Total Entropy (Entropy of the mean prediction)
+    # Convert mean_probs to torch tensor for operations
+    mean_probs_tensor = torch.from_numpy(mean_probs)
+    total_entropy = -torch.sum(mean_probs_tensor *
+                               torch.log(mean_probs_tensor + 1e-9), axis=-1).numpy()
+
+    # Expected Data Entropy (Mean of the entropy of each prediction)
+    log_probs = torch.log(mc_predictions + 1e-9)
+    entropy_per_sample = -torch.sum(mc_predictions * log_probs, dim=-1)
+    expected_data_entropy = entropy_per_sample.mean(dim=0).numpy()
+
+    bald_score = total_entropy - expected_data_entropy
+
+    # Predictive Entropy (simpler uncertainty metric)
+    # This is just 'total_entropy' from above.
+    # High value means the *average* prediction is uncertain (e.g., [0.5, 0.5])
+    predictive_entropy = total_entropy
+
+    return {
+        "mean_target_prob": mean_target_prob,  # For BO
+        "std_dev_target_prob": np.sqrt(variance_target_prob),  # For BO
+        "bald_score": bald_score,  # For AL
+        "predictive_entropy": predictive_entropy,  # For AL
+        "all_mean_probs": mean_probs,  # For inspection
+        "all_pred_variance": pred_variance  # For inspection
+    }
+
+
+def run_acquisition_round(model, data, id2node_dict, acquisition_loader, acquisition_pool, acquisition_goal='active_learning',
+                          bo_strategy='ucb', al_metric='bald_score', target_class=2, query_size=10, mc_samples=50,
+                          bo_kappa=1.96, device='cpu'):
+    """
+    Executes a full acquisition cycle to select the next batch of experiments for labeling.
+
+    Params:
+    -------
+    model : torch.nn.Module
+        The current SynergyGT model.
+    data : torch_geometric.data.Data
+        The experimental and network data.
+    id2node_dict : dict
+        Mapping from gene IDs to human-readable names.
+    acquisition_loader : torch.utils.data.DataLoader
+        DataLoader for the candidate pool.
+    acquisition_pool : list
+        The raw gene pairs corresponding to the loader.
+    acquisition_goal : {'active_learning', 'bayesian_optimization'}, optional
+        The primary goal of selection.
+    bo_strategy : {'ucb', 'ei'}, optional
+        The Bayesian Optimization strategy to use.
+    al_metric : {'bald_score', 'predictive_entropy'}, optional
+        The Active Learning metric to use.
+    target_class : int, optional
+        The class index to optimize (default is 2).
+    query_size : int, optional
+        The number of pairs to select (default is 10).
+    mc_samples : int, optional
+        Number of dropout samples (default is 50).
+    bo_kappa : float, optional
+        The exploration parameter for UCB (default is 1.96).
+    device : str, optional
+        The computing device.
+
+    Returns:
+    -------
+    selected_batch : list
+        The list of selected gene pairs.
+    """
+
+    # Handle case of empty pool_tuples leading to empty loader
+    if len(acquisition_loader) == 0:
+        print("Acquisition loader is empty. No predictions to make.")
+        return []
+
+    # Run MC Dropout to get predictions
+    _, mc_preds = predict_with_mc_dropout(
+        model,
+        acquisition_loader,
+        num_samples=mc_samples,
+        device=device
+    )
+
+    # Calculate all acquisition statistics
+    acq_stats = calculate_acquisition_stats(
+        mc_preds,
+        target_class=target_class
+    )
+
+    # Select the batch based on the chosen goal
+    if acquisition_goal == 'active_learning':
+        selected_batch = select_batch_active_learning(
+            acq_stats,
+            acquisition_pool,
+            id2node_dict,
+            query_size=query_size,
+            metric=al_metric
+        )
+
+    elif acquisition_goal == 'bayesian_optimization':
+        # Get the best score from your training labels
+        # This assumes data_train.y holds the *true* scores/labels
+        # and they are structured to match the target_class.
+
+        # This is a placeholder - you need to get the *actual*
+        # score (e.g., 0.98) from your training labels.
+        # If your labels are one-hot, use:
+        # best_so_far_value = data_train.y[:, target_class].max().item()
+
+        best_so_far_value = data.pair_effect_type_soft_smoothed[:, target_class].max().item()
+        print(f"Using best_so_far_value: {best_so_far_value}")
+
+        selected_batch = select_batch_bayesian_optimization(
+            acq_stats,
+            acquisition_pool,
+            id2node_dict,
+            best_so_far_value=best_so_far_value,
+            query_size=query_size,
+            strategy=bo_strategy,
+            kappa=bo_kappa
+        )
+
+    else:
+        raise ValueError("acquisition_goal must be 'active_learning' or 'bayesian_optimization'")
+
+    print("\n--- Selected Batch for Labeling ---")
+    if not selected_batch:
+        print("No pairs were selected.")
+
+    # Loop to handle both (gA, gB) and (gA, pA, gB, pB)
+    for i, exp in enumerate(selected_batch):
+        if len(exp) == 4:
+            # Handles the old format with perturbations
+            gA, pA, gB, pB = exp
+            print(f"{i + 1}: (gA: {gA}, pA: {pA}, gB: {gB}, pB: {pB})")
+        elif len(exp) == 2:
+            # Handles the new simplified gene-only format
+            gA, gB = exp
+            print(f"{i + 1}: (gA: {gA}, gB: {gB})")
+        else:
+            print(f"{i + 1}: {exp}")
+
+    # Clean up GPU memory
+    del mc_preds, acquisition_loader
+
+    # Handle MPS, CUDA, or CPU cleanup
+    if device == 'mps':
+        torch.mps.empty_cache()
+    elif device == 'cuda':
+        torch.cuda.empty_cache()
+
+    return selected_batch
+
+
 def estimate_map(samples):
-    """Estimates the MAP by finding the mode of the sample distribution via KDE."""
+    """
+    Estimates the Maximum A Posteriori (MAP) via Kernel Density Estimation.
+
+    Params:
+    ------
+    samples : np.ndarray
+        Array of stochastic samples for a specific class probability.
+
+    Returns:
+    -------
+    map_estimate : float
+        The estimated mode of the probability distribution.
+    """
     if np.all(samples == samples[0]):
         return samples[0]
     kernel = stats.gaussian_kde(samples)
@@ -536,63 +1269,25 @@ def estimate_map(samples):
     return x_range[np.argmax(kde_values)]
 
 
-def predict_with_mc_dropout(model, dataloader, num_samples=100, device='cpu'):
-    model.to(device)
-    model.eval()
-
-    # Keep Dropout layers active during inference
-    for m in model.modules():
-        if m.__class__.__name__.startswith('Dropout'):
-            m.train()
-
-    all_samples = [] # Stores (num_samples, batch_size, 3)
-
-    with torch.no_grad():
-        for batch in tqdm(dataloader, desc="MC Dropout Sampling"):
-            inputs = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
-
-            batch_probs = []
-            for _ in range(num_samples):
-                logits = model(inputs)
-                probs = F.softmax(logits, dim=1) #
-                batch_probs.append(probs.cpu().numpy())
-
-            all_samples.append(np.array(batch_probs))
-
-    # Reshape to (num_samples, total_pairs, 3)
-    all_samples = np.concatenate(all_samples, axis=1)
-
-    total_pairs = all_samples.shape[1]
-    all_results = []
-
-    for i in range(total_pairs):
-        pair_samples = all_samples[:, i, :] # (num_samples, 3)
-        class_stats = []
-
-        for c in range(3):
-            samples_c = pair_samples[:, c]
-            mean = np.mean(samples_c)
-            std = np.std(samples_c)
-            # Compute 95% Confidence Interval using percentiles
-            ci_lower, ci_upper = np.percentile(samples_c, [2.5, 97.5])
-            # Compute MAP Estimate
-            map_estimate = estimate_map(samples_c)
-
-            class_stats.append({
-                'mean': mean,
-                'std': std,
-                'ci_95': (ci_lower, ci_upper),
-                'map': map_estimate,
-                'raw_samples': samples_c
-            })
-
-        all_results.append(class_stats)
-
-    return all_results
-
-
 def plot_uncertainty_densities(pair_results, pair_name="Gene Pair"):
-    """Visualizes the densities of predicted probabilities for a single pair."""
+    """
+    Visualizes the probability density functions (KDE) for the three interaction
+    classes based on MC Dropout samples.
+
+    Params:
+    ------
+    pair_results : list
+        The statistical summary for a single gene pair, typically a list of
+        three dictionaries (one per class) containing 'raw_samples', 'map',
+        'ci_95', and 'mean'.
+    pair_name : str, optional
+        The human-readable name of the gene pair (e.g., "DAF-16 + AGE-1")
+        used for the plot title (default is "Gene Pair").
+
+    Returns:
+    -------
+    None
+    """
     classes = ["Antagonistic", "Additive", "Synergistic"]
     colors = ["#3498db", "#95a5a6", "#e74c3c"] # Blue, Gray, Red
 
@@ -626,7 +1321,23 @@ def plot_uncertainty_densities(pair_results, pair_name="Gene Pair"):
 
 def calculate_average_distribution(dataloader, label_name, num_classes, device):
     """
-    Calculates the mean label distribution across a dataset.
+    Computes the average label distribution across a given dataset.
+
+    Params:
+    ------
+    dataloader : torch.utils.data.DataLoader
+        Dataloader containing target labels.
+    label_name : str
+        The key for the target labels.
+    num_classes : int
+        The number of classes in the label distribution.
+    device : torch.device or str
+        The device to run the calculation on.
+
+    Returns:
+    -------
+    avg_dist : torch.Tensor
+        The mean distribution across the dataset.
     """
     total_dist = torch.zeros(num_classes, device=device)
     total_samples = 0
@@ -641,8 +1352,31 @@ def calculate_average_distribution(dataloader, label_name, num_classes, device):
 def naive_baseline(model, train_loader, test_loader, loss_fn, baseline_type='mean', smoothed_label=True,
                       C=3, device=None):
     """
-    Evaluates a naive baseline model on a dataset using the specified baseline type,
-    either baseline_type = 'mean' or 'uniform'.
+    Initializes and evaluates a naive baseline model (Mean or Uniform).
+
+    Params:
+    ------
+    model : torch.nn.Module
+        A baseline model instance.
+    train_loader : torch.utils.data.DataLoader
+        Dataloader used to calculate mean distribution (for 'mean' baseline).
+    test_loader : torch.utils.data.DataLoader
+        Dataloader for model evaluation.
+    loss_fn : callable
+        Loss function for evaluation.
+    baseline_type : {'mean', 'uniform'}, optional
+        The type of naive strategy to employ (default is 'mean').
+    smoothed_label : bool, optional
+        Whether to use smoothed target labels (default is True).
+    C : int, optional
+        Number of interaction classes (default is 3).
+    device : torch.device, optional
+        Device to run evaluation on.
+
+    Returns:
+    -------
+    test_results : dict
+        Performance metrics for the naive baseline.
     """
     if baseline_type not in ['mean', 'uniform']:
         raise ValueError("baseline_type must be 'mean' or 'uniform'")
@@ -702,7 +1436,25 @@ def naive_baseline(model, train_loader, test_loader, loss_fn, baseline_type='mea
 
 
 def _get_representations(model, dataloader, device):
-    """Helper to extract representations and labels from a dataloader."""
+    """
+    Extracts the model's internal latent representations for nodes or pairs.
+
+    Params:
+    ------
+    model : torch.nn.Module
+        The model used for feature extraction.
+    dataloader : torch.utils.data.DataLoader
+        The data to pass through the model.
+    device : str or torch.device
+        The computing device.
+
+    Returns:
+    -------
+    reps : np.ndarray
+        The extracted latent features.
+    labels : np.ndarray
+        The corresponding ground-truth soft labels.
+    """
     model.eval()
     model.to(device)
     reps, labels = [], []
@@ -720,7 +1472,23 @@ def _get_representations(model, dataloader, device):
 
 
 def visualize_synergy_landscape(model, train_loader, test_loader, method='tsne', device='mps'):
-    # 1. Extract data
+    """
+    Generates a 2D projection (t-SNE or UMAP) of the model's internal gene-pair representations.
+
+    Params:
+    -------
+    model : torch.nn.Module
+        The trained SynergyGT model.
+    train_loader : torch.utils.data.DataLoader
+        The training data to project.
+    test_loader : torch.utils.data.DataLoader
+        The testing data to project.
+    method : {'tsne', 'umap'}, optional
+        The dimensionality reduction technique (default is 'tsne').
+    device : str, optional
+        The computing device.
+    """
+    # Extract data
     print("Extracting [PAIR] representations...")
     X_train, y_train = _get_representations(model, train_loader, device)
     X_test, y_test = _get_representations(model, test_loader, device)
@@ -729,7 +1497,7 @@ def visualize_synergy_landscape(model, train_loader, test_loader, method='tsne',
     X_combined = np.concatenate([X_train, X_test], axis=0)
     n_train = X_train.shape[0]
 
-    # 2. Run Dimensionality Reduction
+    # Run Dimensionality Reduction
     if method.lower() == 'tsne':
         print(f"Running t-SNE on {X_combined.shape[0]} total pairs... ({X_train.shape[0]} train, {X_test.shape[0]} test)")
         reducer = TSNE(n_components=2, perplexity=30, random_state=23, init='pca', learning_rate='auto')
@@ -746,7 +1514,7 @@ def visualize_synergy_landscape(model, train_loader, test_loader, method='tsne',
     X_train_emb = X_emb[:n_train]
     X_test_emb = X_emb[n_train:]
 
-    # 3. Plotting
+    # Plotting
     fig, axes = plt.subplots(1, 2, figsize=(18, 7), sharex=True, sharey=True)
     datasets = [
         (X_train_emb, y_train, "Training Set", axes[0]),
@@ -776,6 +1544,24 @@ def visualize_synergy_landscape(model, train_loader, test_loader, method='tsne',
 
 
 def analyze_top_attended_nodes(model, loader, id_to_name_map, device, top_k=20, min_occurrences=0):
+    """
+    Analyzes Transformer attention weights to identify which nodes the model focuses on most.
+
+    Params:
+    -------
+    model : torch.nn.Module
+        The SynergyGT model with attention recording enabled.
+    loader : torch.utils.data.DataLoader
+        The data to analyze.
+    id_to_name_map : dict
+        Mapping from IDs to gene names.
+    device : str
+        The computing device.
+    top_k : int, optional
+        Number of top nodes to display in the summary table (default is 20).
+    min_occurrences : int, optional
+        Minimum times a node must appear in the data to be considered (default is 0).
+    """
     model.to(device)
     model.eval()
 
@@ -959,7 +1745,22 @@ def analyze_top_attended_nodes(model, loader, id_to_name_map, device, top_k=20, 
 
 
 def plot_subgraph_sample(subgraph_data, data_network, id2node_dict):
+    """
+    Visualizes a single subgraph sample with focal genes highlighted.
 
+    Params:
+    ------
+    subgraph_data : list
+        List containing a single subgraph dictionary.
+    data_network : torch_geometric.data.Data
+        The global network object.
+    id2node_dict : dict
+        Mapping from gene IDs to names.
+
+    Returns:
+    -------
+    None
+    """
     if len(subgraph_data) != 1:
         raise ValueError(f"Expected 1 subgraph, but got {len(subgraph_data)}")
 
@@ -1002,6 +1803,20 @@ def plot_subgraph_sample(subgraph_data, data_network, id2node_dict):
 
 
 def analyze_subgraph_sample(subgraph_data, id2node_dict):
+    """
+    Prints descriptive statistics for a specific subgraph (distances and edge types).
+
+    Params:
+    ------
+    subgraph_data : list
+        List containing a single subgraph dictionary.
+    id2node_dict : dict
+        Mapping from gene IDs to names.
+
+    Returns:
+    -------
+    None
+    """
 
     if len(subgraph_data) != 1:
         raise ValueError(f"Expected 1 subgraph, but got {len(subgraph_data)}")
@@ -1052,8 +1867,16 @@ def analyze_subgraph_sample(subgraph_data, id2node_dict):
 
 def single_gene_summary(gene_id, data_original, id2node_dict):
     """
-    Get network summary statistics for a single gene in the C. elegans interaction network,
-    including full experimental details for tested pairs.
+    Provides a biological and network-centric summary for a specific gene in the network.
+
+    Params:
+    -------
+    gene_id : int
+        The internal node ID of the gene.
+    data_original : torch_geometric.data.Data
+        The full graph and experimental dataset.
+    id2node_dict : dict
+        Mapping from IDs to gene names.
     """
     # Mapping for perturbation IDs based on typical project schema:
     # 0=knockdown, 1=knockout, 2=overexpression
@@ -1147,8 +1970,22 @@ def single_gene_summary(gene_id, data_original, id2node_dict):
 
 def single_gene_predictions(predictions, id2node_dict, gene_id, top_n=10):
     """
-    Summarizes model predictions for a specific gene across all evaluated pairs.
-    Outputs a table of top synergistic double mutants in the style of single_gene_summary.
+    Aggregates and ranks model predictions involving a specific gene of interest.
+
+    Params:
+    ------
+    predictions : dict
+        The output from get_predictions_synergy_model.
+    id2node_dict : dict
+        Mapping from gene IDs to names.
+    gene_id : int
+        The target gene's node ID.
+    top_n : int, optional
+        Number of top synergistic partners to display (default is 10).
+
+    Returns:
+    -------
+    None
     """
     pairs = predictions['pairs']
     preds = np.array(predictions['preds'])
