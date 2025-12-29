@@ -1,12 +1,12 @@
 # SynergyGT: a Graph Transformer for Predicting Gene Synergy in *C. elegans* Aging
 
-This repository contains the scripts and notebooks for SynergyGT, a model that serves as a computational tool for the Levine Lab and its research on the genetics of aging in the roundworm *C. elegans*. Although individual genes associated with aging and longevity have been well-studied, aging is a complex, emergent phenotype driven by a combination of nonlinear genetic interactions. Synergistic gene interactions offer a view into the complexity of aging, and by using deep learning to reveal such relationships in the genetic interaction network we can better understand how aging emerges. SynergyGT does this by combining knowledge of gene-aging associations and a network of mechanistic gene-gene interactions to learn features of known synergistic gene pairs that distinguish them from those that are not. With a design inspired by biology and modern LLMs, SynergyGT can predict synergistic interactions at a level significantly better than naive baselines. In practice the model can be used to characterize the likelihood of synergy between any pair of genes, which could lead to the discovery of novel synergistic interactions and a better understanding of the genetic landscape of aging. 
+This repository contains the scripts and notebooks for SynergyGT, a model that serves as a computational tool for the Levine Lab and its research on the genetics of aging in the roundworm *C. elegans*. Although individual genes associated with aging and longevity have been well-studied, aging is a complex, emergent phenotype driven by a combination of nonlinear genetic interactions. Synergistic gene interactions offer a view into the complexity of aging, and by using deep learning to reveal such relationships in the genetic interaction network we can better understand how aging emerges. SynergyGT does this by combining knowledge of gene-aging associations and a network of mechanistic gene-gene interactions to learn features of known synergistic gene pairs that distinguish them from those that are not. With a design inspired by biology and modern LLMs, SynergyGT can predict synergistic interactions at a level significantly better than naive baselines. In practice, the model can be used to characterize the likelihood of synergy between any pair of genes, which could lead to the discovery of novel synergistic interactions and a better understanding of the genetic landscape of aging. 
 <p align="center">
   <img src="https://github.com/Bradley-Buchner/worm_synergy/blob/06b4c0e873074db633e62bfa9f4ade581686c01f/figures/synergy_gt_schema_readme.jpg" width="800">
 </p>
 
 ## Using SynergyGT
-To use/try out SynergyGT, there are two jupyter notebooks in the `/notebooks` directory that can easily be run in Google Colab. The first, named "model_demo.ipynb", walks you through the process of building and training a SynergyGT model and evaluating its outputs/predictions. The second, named "model_exploration.ipynb", lets you interact with a trained SynergyGT model and test it on any gene or gene pair of interest. Click the "Run in Colab" button at the top of these notebooks to run them yourself. 
+To use SynergyGT, there are two jupyter notebooks in the `/notebooks` directory that can easily be run in Google Colab. The first, named "model_demo.ipynb", walks you through the process of building and training a SynergyGT model and evaluating its performance. The second, named "model_exploration.ipynb", lets you interact with a trained SynergyGT model and test it on any gene or gene pair of interest. Click the "Run in Colab" button at the top of these notebooks to run them yourself. 
 
 ## Model Schema
 This section outlines the conceptual blueprint of the model, specifying the information it consumes, how that information is represented, what the model is trained to predict, and the assumptions under which its learns.
@@ -76,17 +76,6 @@ The model is trained to minimize the Kullback–Leibler (KL) divergence between 
 
 ### Output
 For any pair of gene perturbations, the model outputs predicted relative frequencies for antagonistic, additive, and synergistic lifespan effects. These predictions can be interpreted as a probability distribution over expected genetic interaction effects, and can be used to prioritize candidate gene pairs for experimental validation.
-
-
-
-TO-DO:
-* make a visualization of the model
-* describe how to interact with the model
-* something about AI-guided discovery
-
-
-Link to SynergyGT guide: []
-
 Link to model Demo: []
 
 Link to exploratory tool/notebook: []
