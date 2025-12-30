@@ -45,7 +45,7 @@ Each gene pair is represented as a localized subgraph from the global interactio
 
 **Pair subgraphs**
 * **Node set:** The union of the one-hop neighborhoods of both perturbed genes
-* **Edge set:** All edges are retained from the original interaction network, preserving directionality and interaction type
+* **Edge set:** All edges are retained from the global network, preserving directionality and interaction type
 
 **Node-level features**
 
