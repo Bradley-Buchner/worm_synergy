@@ -63,7 +63,7 @@ The model maps pair-centered subgraphs to predicted interaction outcomes using a
 **Subgraph encoder**
 
 A graph transformer is used to encode each subgraph into a fixed-dimensional vector representation.
-* Nodes are treated as tokens (analogous to how LLMs tokenize sentences into words), with graph structure incorporated directly into the attention mechanism.
+* Nodes are treated as tokens (analogous to how LLMs treat words as tokens), with graph structure incorporated directly into the attention mechanism.
 * Each node attribute (e.g., degree, aging proximity, perturbation status) is embedded into a small fixed-dimensional vector; these embeddings are learned and summed to produce a single representation for each node/token.
 * A synthetic [CLS] node added to each subgraph learns to aggregate information from all other nodes to form another small fixed-dimensional summary representation of the subgraph.
 
