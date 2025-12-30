@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from scipy.stats import kendalltau
 
+
 def ndcg_score(y_preds: torch.Tensor, y_true: torch.Tensor, k: int = None):
     """
     Computes the Normalized Discounted Cumulative Gain (NDCG) for a batch.
@@ -31,6 +32,7 @@ def ndcg_score(y_preds: torch.Tensor, y_true: torch.Tensor, k: int = None):
 
     return ndcg.mean()
 
+
 def top_k_set_agreement(y_preds: torch.Tensor, y_true: torch.Tensor, k: int):
     """
     Computes the Top-k Set Agreement score for a batch.
@@ -59,6 +61,7 @@ def top_k_set_agreement(y_preds: torch.Tensor, y_true: torch.Tensor, k: int):
 
     return agreement_rate
 
+
 def kendalls_tau_score(y_preds: torch.Tensor, y_true: torch.Tensor):
     """
     Computes the average Kendall's Tau rank correlation for a batch.
@@ -76,12 +79,21 @@ def kendalls_tau_score(y_preds: torch.Tensor, y_true: torch.Tensor):
     y_preds_np = y_preds.cpu().numpy()
     y_true_np = y_true.cpu().numpy()
 
+    # Check if the input is empty to avoid the "empty slice" warning
+    if y_preds_np.shape[0] == 0:
+        return np.nan
+
     tau_scores = []
     for i in range(y_preds_np.shape[0]):
         tau_result = kendalltau(y_preds_np[i], y_true_np[i])
         tau_scores.append(tau_result.correlation)
 
+    # Check if tau_scores contains only NaNs or is empty
+    if not tau_scores:
+        return np.nan
+
     return np.nanmean(tau_scores)
+
 
 def per_class_top_1_agreement(y_preds: torch.Tensor, y_true: torch.Tensor):
     """
