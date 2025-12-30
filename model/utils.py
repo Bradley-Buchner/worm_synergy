@@ -954,7 +954,7 @@ def select_batch_active_learning(acq_stats, pool_tuples, id2node_dict, query_siz
         partner_name = id2node_dict.get(gB_id, f"ID:{gB_id}")
 
         # Create the specific string format requested
-        mutant_str = f"{gene_name}(kd) + {partner_name}(ko)"
+        mutant_str = f"{gene_name}(kd), {partner_name}(ko)"
 
         # Print formatted row matching the single_gene_predictions style
         print(f"{i + 1:<4} | {scores[idx]:<10.5f} | {mutant_str}")
@@ -1040,7 +1040,7 @@ def select_batch_bayesian_optimization(acq_stats, pool_tuples,
         gA_id, gB_id = pool_tuples[idx]
         name_A = id2node_dict.get(gA_id, f"ID:{gA_id}")
         name_B = id2node_dict.get(gB_id, f"ID:{gB_id}")
-        return f"{name_A}(kd) + {name_B}(ko)"
+        return f"{name_A}(kd), {name_B}(ko)"
 
     if strategy.lower() == 'ucb':
         print(f"{'Rank':<4} | {'UCB Score':<10} | {'Mean Prob':<10} | {'Std Dev':<10} | {'Mutant':<45}")
@@ -1227,11 +1227,16 @@ def run_acquisition_round(model, data, id2node_dict, acquisition_loader, acquisi
         if len(exp) == 4:
             # Handles the old format with perturbations
             gA, pA, gB, pB = exp
-            print(f"{i + 1}: (gA: {gA}, pA: {pA}, gB: {gB}, pB: {pB})")
+            name_a = id2node_dict.get(gA, f"ID:{gA}")
+            name_b = id2node_dict.get(gB, f"ID:{gB}")
+            print(f"{i + 1}: {name_a}({pA}), {name_b}({pB})")
+
         elif len(exp) == 2:
             # Handles the new simplified gene-only format
             gA, gB = exp
-            print(f"{i + 1}: (gA: {gA}, gB: {gB})")
+            name_a = id2node_dict.get(gA, f"ID:{gA}")
+            name_b = id2node_dict.get(gB, f"ID:{gB}")
+            print(f"{i + 1}: {name_a}({pA}), {name_b}({pB})")
         else:
             print(f"{i + 1}: {exp}")
 
@@ -2026,7 +2031,7 @@ def single_gene_predictions(predictions, id2node_dict, gene_id, top_n=10):
         synergy_prob = filtered_preds[i, 2]
 
         # Format the mutant column as requested
-        mutant_str = f"{gene_name}(kd) + {partner_name}(ko)"
+        mutant_str = f"{gene_name}(kd), {partner_name}(ko)"
 
         # Print formatted row
         print(f"    {mutant_str:<45} | {synergy_prob:.3f}")
