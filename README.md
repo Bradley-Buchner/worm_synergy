@@ -64,10 +64,10 @@ The model maps pair-centered subgraphs to predicted interaction outcomes using a
 
 A graph transformer is used to encode each subgraph into a fixed-dimensional vector representation.
 * Nodes are treated as tokens (analogous to how LLMs treat words as tokens), with graph structure incorporated directly into the attention mechanism.
-* Each node attribute (e.g., degree, aging proximity, perturbation status) is embedded into a small fixed-dimensional vector; these embeddings are learned and summed to produce a single representation for each node/token.
+* Each node attribute (e.g., degree, aging proximity, perturbation status) is embedded into a small fixed-dimensional vector; these embeddings are learned and summed to produce a single representation for each node.
 * A synthetic [CLS] node added to each subgraph learns to aggregate information from all other nodes to form another small fixed-dimensional summary representation of the subgraph.
 
-The calculation of attention between nodes is intentionally biased to reflect:
+The calculation of attention between nodes is modified to capture:
 * **Causality:** Nodes are enforced to attend only to their descendents in the directed graph.
 * **Proximity:** Learnable biases based on hop distance between nodes.
 * **Interaction semantics:** Separate value projections are learned for each interaction type (genetic, physical, regulatory).
@@ -82,7 +82,6 @@ A multilayer perceptron with one hidden layer takes a CLS token's subgraph repre
 The model is trained to minimize the Kullback–Leibler (KL) divergence between predicted and observed relative interaction-type frequencies for each gene pair. This formulation treats relative interaction-type frequencies as soft classification labels, and is an example of label distribution learning.
 
 *Note: To account for the diverse quantity of experiments recorded for each unique double mutant and, as a result, varying evidence and confidence levels, observed interaction-type counts were smoothed via Bayesian smoothing with a maximally ignorant prior that assumed pseudocounts of 1 for each interaction type (i.e., assumes all types are equally likely).*
-
 
 ### Output
 For any pair of gene perturbations, the model outputs predicted relative frequencies for antagonistic, additive, and synergistic lifespan effects. These predictions can be interpreted as a probability distribution over expected genetic interaction effects, and can be used to prioritize candidate gene pairs for experimental validation.
