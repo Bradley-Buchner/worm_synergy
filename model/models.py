@@ -108,6 +108,7 @@ class SynergyGT(nn.Module):
         self.sum_node_features = params.get('sum_node_features', True)
         self.use_pretrained_gene_embs = params.get('use_pretrained_gene_embs', False)
         self.pretrained_gene_embs_tensor = params.get('pretrained_gene_embs_tensor', None)
+        self.fine_tune_gene_emb = params.get('fine_tune_gene_emb', False)
         self.max_spd = params.get('max_spd', 6)
         self.structural_max_dist = params.get('max_spd', 6)
         self.num_degree_bins = params.get('num_degree_bins', 5)
