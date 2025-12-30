@@ -16,22 +16,28 @@ Click the "Run in Colab" button at the top of these notebooks to run them yourse
 This section outlines the conceptual blueprint of the model, specifying the information it consumes, how that information is represented, what the model is trained to predict, and the assumptions under which its learns.
 
 ### Input
-The model integrates two primary data sources:
+The model integrates three primary data sources:
 
 **1. Genetic interaction network (from WormBase)**
 
 A directed, heterogeneous interaction network representing known molecular and genetic relationships in C. elegans.
-   * 11,493 nodes (genes/proteins) and 90,364 edges
-   * 3 types of edges (interactions): genetic, physical, and regulatory
-   * Edges are directed to reflect causal relationships where applicable; non-causal interactions are represented by bidirectional edges.
+* 11,493 nodes (genes/proteins) and 90,364 edges
+* 3 types of edges (interactions): genetic, physical, and regulatory
+* Edges are directed to reflect causal relationships where applicable; non-causal interactions are represented by bidirectional edges
 
-**2. Double mutant lifespan assays (from SynergyAge)**
+**2. Gene-lifespan phenotype associations (from Gene Ontology)**
 
-A curated collection of lifespan measurements for combinatorial genetic interventions in *C. elegans*
+Functional annotations linking genes to biological processes and molecular functions specifically associated with aging and longevity.
+* Incorporates higher-level biological context through GO terms
+* Provides a layer of functional information that complements the topology of the interaction network
+
+**3. Double mutant lifespan assays (from SynergyAge)**
+
+A curated collection of lifespan measurements for combinatorial genetic interventions in *C. elegans*.
 * 1,458 double mutant experiments, 801 unique double mutants (i.e., gene perturbation pairs)
 * Each experiment is categorized as resulting in an antagonistic, additive, or synergistic effect on lifespan
 
-Together, these inputs provide both the network context in which genes interact and empirical measurements of how pairs of genetic perturbations affect lifespan.
+Together, these sources allow the model to leverage biological knowledge alongside experimental outcomes to uncover the hidden regulatory logic of *C. elegans* aging.
 
 
 ### Representation
@@ -39,7 +45,7 @@ Each gene pair is represented as a localized subgraph from the global interactio
 
 **Pair subgraphs**
 * **Node set:** The union of the one-hop neighborhoods of both perturbed genes
-* **Edge set:** All edges induced from the original interaction network, preserving directionality and interaction type
+* **Edge set:** All edges are retained from the global network, preserving directionality and interaction type
 
 **Node-level features**
 
@@ -57,11 +63,11 @@ The model maps pair-centered subgraphs to predicted interaction outcomes using a
 **Subgraph encoder**
 
 A graph transformer is used to encode each subgraph into a fixed-dimensional vector representation.
-* Nodes are treated as tokens (analogous to how LLMs tokenize sentences into words), with graph structure incorporated directly into the attention mechanism.
-* Each node attribute (e.g., degree, aging proximity, perturbation status) is embedded into a small fixed-dimensional vector; these embeddings are learned and summed to produce a single representation for each node/token.
+* Nodes are treated as tokens (analogous to how LLMs treat words as tokens), with graph structure incorporated directly into the attention mechanism.
+* Each node attribute (e.g., degree, aging proximity, perturbation status) is embedded into a small fixed-dimensional vector; these embeddings are learned and summed to produce a single representation for each node.
 * A synthetic [CLS] node added to each subgraph learns to aggregate information from all other nodes to form another small fixed-dimensional summary representation of the subgraph.
 
-The calculation of attention between nodes is intentionally biased to reflect:
+The calculation of attention between nodes is modified to capture:
 * **Causality:** Nodes are enforced to attend only to their descendents in the directed graph.
 * **Proximity:** Learnable biases based on hop distance between nodes.
 * **Interaction semantics:** Separate value projections are learned for each interaction type (genetic, physical, regulatory).
@@ -76,7 +82,6 @@ A multilayer perceptron with one hidden layer takes a CLS token's subgraph repre
 The model is trained to minimize the Kullback–Leibler (KL) divergence between predicted and observed relative interaction-type frequencies for each gene pair. This formulation treats relative interaction-type frequencies as soft classification labels, and is an example of label distribution learning.
 
 *Note: To account for the diverse quantity of experiments recorded for each unique double mutant and, as a result, varying evidence and confidence levels, observed interaction-type counts were smoothed via Bayesian smoothing with a maximally ignorant prior that assumed pseudocounts of 1 for each interaction type (i.e., assumes all types are equally likely).*
-
 
 ### Output
 For any pair of gene perturbations, the model outputs predicted relative frequencies for antagonistic, additive, and synergistic lifespan effects. These predictions can be interpreted as a probability distribution over expected genetic interaction effects, and can be used to prioritize candidate gene pairs for experimental validation.
