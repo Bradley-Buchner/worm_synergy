@@ -664,7 +664,8 @@ def generate_subgraph_samples(data, configs, degree_epsilon=1.0):
         except Exception as e:
             print(f"Error saving processed samples: {e}")
             raise
-        print("--- Pre-processing finished successfully! ---")
+        print(f"--- Pre-processing finished successfully! Returning {len(processed_samples)} samples. ---")
+        return processed_samples
     else:
         print(f"--- Pre-processing finished successfully! Returning {len(processed_samples)} samples. ---")
         return processed_samples
