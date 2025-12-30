@@ -16,22 +16,28 @@ Click the "Run in Colab" button at the top of these notebooks to run them yourse
 This section outlines the conceptual blueprint of the model, specifying the information it consumes, how that information is represented, what the model is trained to predict, and the assumptions under which its learns.
 
 ### Input
-The model integrates two primary data sources:
+The model integrates three primary data sources:
 
 **1. Genetic interaction network (from WormBase)**
 
 A directed, heterogeneous interaction network representing known molecular and genetic relationships in C. elegans.
-   * 11,493 nodes (genes/proteins) and 90,364 edges
-   * 3 types of edges (interactions): genetic, physical, and regulatory
-   * Edges are directed to reflect causal relationships where applicable; non-causal interactions are represented by bidirectional edges.
+* 11,493 nodes (genes/proteins) and 90,364 edges
+* 3 types of edges (interactions): genetic, physical, and regulatory
+* Edges are directed to reflect causal relationships where applicable; non-causal interactions are represented by bidirectional edges
 
-**2. Double mutant lifespan assays (from SynergyAge)**
+**2. Gene-lifespan phenotype associations (from Gene Ontology)**
 
-A curated collection of lifespan measurements for combinatorial genetic interventions in *C. elegans*
+Functional annotations linking genes to biological processes and molecular functions specifically associated with aging and longevity.
+* Incorporates higher-level biological context through GO terms
+* Provides a layer of functional information that complements the topology of the interaction network
+
+**3. Double mutant lifespan assays (from SynergyAge)**
+
+A curated collection of lifespan measurements for combinatorial genetic interventions in *C. elegans*.
 * 1,458 double mutant experiments, 801 unique double mutants (i.e., gene perturbation pairs)
 * Each experiment is categorized as resulting in an antagonistic, additive, or synergistic effect on lifespan
 
-Together, these inputs provide both the network context in which genes interact and empirical measurements of how pairs of genetic perturbations affect lifespan.
+Together, these sources allow the model to leverage biological knowledge alongside experimental outcomes to uncover the hidden regulatory logic of *C. elegans* aging.
 
 
 ### Representation
