@@ -1,7 +1,7 @@
 import torch.nn.functional as F
 from torchmetrics import AUROC, AveragePrecision
-# from tqdm import tqdm
-from tqdm.notebook import tqdm
+from tqdm import tqdm
+# from tqdm.notebook import tqdm
 import matplotlib.pyplot as plt
 from scipy import stats
 from scipy.stats import pearsonr, norm
