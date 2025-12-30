@@ -1236,7 +1236,7 @@ def run_acquisition_round(model, data, id2node_dict, acquisition_loader, acquisi
             gA, gB = exp
             name_a = id2node_dict.get(gA, f"ID:{gA}")
             name_b = id2node_dict.get(gB, f"ID:{gB}")
-            print(f"{i + 1}: {name_a}({pA}), {name_b}({pB})")
+            print(f"{i + 1}: {name_a}(kd), {name_b}(ko)")
         else:
             print(f"{i + 1}: {exp}")
 
