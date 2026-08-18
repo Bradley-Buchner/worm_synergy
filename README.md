@@ -68,7 +68,7 @@ A graph transformer is used to encode each subgraph into a fixed-dimensional vec
 * A synthetic [CLS] node added to each subgraph learns to aggregate information from all other nodes to form another small fixed-dimensional summary representation of the subgraph.
 
 The calculation of attention between nodes is modified to capture:
-* **Causality:** Nodes are enforced to attend only to their descendents in the directed graph.
+* **Causality:** Nodes are enforced to attend only to their ancestors in the directed graph.
 * **Proximity:** Learnable biases based on hop distance between nodes.
 * **Interaction semantics:** Separate value projections are learned for each interaction type (genetic, physical, regulatory).
 
